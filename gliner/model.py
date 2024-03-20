@@ -88,7 +88,8 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         return optimizer
 
     def compute_score_train(self, x):
-        span_idx = x['span_idx'] * x['span_mask'].unsqueeze(-1)
+        # x['span_mask']  ([B, 684])
+        span_idx = x['span_idx'] * x['span_mask'].unsqueeze(-1)  # ([B, 264, 2])
 
         new_length = x['seq_length'].clone()
         new_tokens = []
@@ -157,8 +158,9 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         entity_type_rep = pad_sequence(entity_type_rep, batch_first=True)  # [batch_size, len_types, hidden_size]
 
         # compute span representation
-        word_rep = self.rnn(word_rep, mask)
-        span_rep = self.span_rep_layer(word_rep, span_idx)
+        #   span_idx   ([B, 264, 2])
+        word_rep = self.rnn(word_rep, mask)  # ([B, seq_length, D])
+        span_rep = self.span_rep_layer(word_rep, span_idx)   # ([B, seq_length, 12, D])
 
         # compute final entity type representation (FFN)
         entity_type_rep = self.prompt_rep_layer(entity_type_rep)  # (batch_size, len_types, hidden_size)
