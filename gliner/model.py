@@ -2,6 +2,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import os
 from typing import Dict, Optional, Union
 import torch
 import torch.nn.functional as F
@@ -88,8 +89,8 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         return optimizer
 
     def compute_score_train(self, x):
-        # x['span_mask']  ([B, 684])
-        span_idx = x['span_idx'] * x['span_mask'].unsqueeze(-1)  # ([B, 264, 2])
+
+        span_idx = x['span_idx'] * x['span_mask'].unsqueeze(-1)  # ([B, num_possible_spans, 2])  *  ([B, num_possible_spans, 1])
 
         new_length = x['seq_length'].clone()
         new_tokens = []
@@ -105,8 +106,8 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             # add enity types to prompt
             for entity_type in all_types_i:
                 entity_prompt.append(self.entity_token)  # [ENT] token
-                entity_prompt.append(entity_type)  # entity type
-            entity_prompt.append(self.sep_token)  # [SEP] token
+                entity_prompt.append(entity_type)        # entity type
+            entity_prompt.append(self.sep_token)         # [SEP] token
 
             # prompt format:
             # [ENT] entity_type [ENT] entity_type ... [ENT] entity_type [SEP]
@@ -153,46 +154,59 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             entity_type_rep.append(entity_rep)
 
         # padding for word_rep, mask and entity_type_rep
-        word_rep = pad_sequence(word_rep, batch_first=True)  # [batch_size, seq_len, hidden_size]
-        mask = pad_sequence(mask, batch_first=True)  # [batch_size, seq_len]
+        word_rep = pad_sequence(word_rep, batch_first=True)                # [batch_size, seq_len, hidden_size]
+        mask = pad_sequence(mask, batch_first=True)                        # [batch_size, seq_len]
         entity_type_rep = pad_sequence(entity_type_rep, batch_first=True)  # [batch_size, len_types, hidden_size]
 
         # compute span representation
-        #   span_idx   ([B, 264, 2])
-        word_rep = self.rnn(word_rep, mask)  # ([B, seq_length, D])
-        span_rep = self.span_rep_layer(word_rep, span_idx)   # ([B, seq_length, 12, D])
+        word_rep = self.rnn(word_rep, mask)                  # ([B, seq_length, D])
+        span_rep = self.span_rep_layer(word_rep, span_idx)   # NER --> ([B, seq_length, 12, D]) or REL --> ([B, num_pairs, D])
+        import ipdb;ipdb.set_trace()
 
         # compute final entity type representation (FFN)
         entity_type_rep = self.prompt_rep_layer(entity_type_rep)  # (batch_size, len_types, hidden_size)
-        num_classes = entity_type_rep.shape[1]  # number of entity types
+        num_classes = entity_type_rep.shape[1]                    # number of entity types
 
         # similarity score
-        scores = torch.einsum('BLKD,BCD->BLKC', span_rep, entity_type_rep)
+        if os.environ.get('TASK') == 'ner':
+            scores = torch.einsum('BLKD,BCD->BLKC', span_rep, entity_type_rep)
+        elif os.environ.get('TASK') == 'rel':
+            scores = torch.einsum('BKD,BCD->BKC', span_rep, entity_type_rep)
 
-        return scores, num_classes, entity_type_mask
+
+        return scores, num_classes, entity_type_mask   #  ([B, L, K, num_classes]), num_classes, ([B, num_classes])
 
     def forward(self, x):
         # compute span representation
         scores, num_classes, entity_type_mask = self.compute_score_train(x)
         batch_size = scores.shape[0]
 
+        import ipdb;ipdb.set_trace()
+
+        # if os.environ.get('TASK') == 'ner':
+
         # loss for filtering classifier
         logits_label = scores.view(-1, num_classes)
-        labels = x["span_label"].view(-1)  # (batch_size * num_spans)
-        mask_label = labels != -1  # (batch_size * num_spans)
+
+        if os.environ['TASK'] == 'ner':
+            labels = x["span_label"].view(-1)    # (batch_size * num_spans)
+        elif os.environ['TASK'] == 'rel':
+            labels = x['rel_labels'].view(-1)    # Flatten ground truth labels to [B * num_entity_pairs]
+
+        mask_label = labels != -1            # (batch_size * num_spans)
         labels.masked_fill_(~mask_label, 0)  # Set the labels of padding tokens to 0
 
         # one-hot encoding
-        labels_one_hot = torch.zeros(labels.size(0), num_classes + 1, dtype=torch.float32).to(scores.device)
-        labels_one_hot.scatter_(1, labels.unsqueeze(1), 1)  # Set the corresponding index to 1
-        labels_one_hot = labels_one_hot[:, 1:]  # Remove the first column
+        labels_one_hot = torch.zeros(labels.size(0), num_classes + 1, dtype=torch.float32).to(scores.device) # ([batch_size * num_spans, num_classes + 1])
+        labels_one_hot.scatter_(1, labels.unsqueeze(1), 1)  # Set the corresponding index to 1  why??
+        labels_one_hot = labels_one_hot[:, 1:]              # Remove the first column           why??
         # Shape of labels_one_hot: (batch_size * num_spans, num_classes)
 
         # compute loss (without reduction)
         all_losses = F.binary_cross_entropy_with_logits(logits_label, labels_one_hot,
                                                         reduction='none')
         # mask loss using entity_type_mask (B, C)
-        masked_loss = all_losses.view(batch_size, -1, num_classes) * entity_type_mask.unsqueeze(1)
+        masked_loss = all_losses.view(batch_size, -1, num_classes) * entity_type_mask.unsqueeze(1)   #  ([B, L*K, num_classes])  *  ([B, 1, num_classes])
         all_losses = masked_loss.view(-1, num_classes)
         # expand mask_label to all_losses
         mask_label = mask_label.unsqueeze(-1).expand_as(all_losses)
@@ -201,6 +215,42 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         # apply mask
         all_losses = all_losses * mask_label.float() * weight_c
         return all_losses.sum()
+        
+        # elif os.environ['TASK'] == 'rel':
+
+        #     # Assume ground_truth_labels is a tensor of shape [B, num_entity_pairs]
+        #     # where each element is the class index for the relation, or -1 for padding/no relation.
+        #     batch_size, num_entity_pairs, _ = scores.shape
+            
+        #     # Flatten scores and ground_truth_labels to fit into [batch_size * num_entity_pairs, num_classes]
+        #     logits_label = scores.view(-1, num_classes)
+        #     labels = x['rel_labels'].view(-1)  # Flatten ground truth labels to [B * num_entity_pairs]
+
+        #     # Create a mask for valid labels
+        #     mask_label = labels != -1
+        #     labels.masked_fill_(~mask_label, 0)  # Set labels for padding/no relation to 0
+
+        #     # One-hot encoding of labels
+        #     labels_one_hot = torch.zeros(labels.size(0), num_classes, dtype=torch.float32).to(scores.device)
+        #     labels_one_hot.scatter_(1, labels.unsqueeze(1), 1)  # Set corresponding index to 1
+        #     # Shape of labels_one_hot: (batch_size * num_entity_pairs, num_classes)
+
+        #     # Compute loss (without reduction)
+        #     all_losses = F.binary_cross_entropy_with_logits(logits_label, labels_one_hot, reduction='none')
+
+        #     # Mask loss using entity_type_mask, which should match the [B, num_entity_pairs, num_classes] shape when reshaped
+        #     masked_loss = all_losses.view(batch_size, num_entity_pairs, num_classes) * entity_type_mask.unsqueeze(1)
+        #     all_losses = masked_loss.view(-1, num_classes)
+
+        #     # Expand mask_label to cover all classes for each entity pair
+        #     mask_label = mask_label.unsqueeze(-1).expand_as(all_losses)
+
+        #     # put lower loss for in label_one_hot (2 for positive, 1 for negative)
+        #     weight_c = labels_one_hot + 1
+        #     # apply mask
+        #     all_losses = all_losses * mask_label.float() * weight_c
+        #     return all_losses.sum()
+
 
     def compute_score_eval(self, x, device):
         # check if classes_to_id is dict
