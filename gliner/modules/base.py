@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 import random
+import os
 
 
 class InstructBase(nn.Module):
@@ -32,10 +33,19 @@ class InstructBase(nn.Module):
             length = len(tokens)
 
         spans_idx = []
-        for i in range(length):
-            spans_idx.extend([(i, i + j) for j in range(self.max_width)])
+        if os.environ.get('TASK') == 'ner':
+            for i in range(length):
+                spans_idx.extend([(i, i + j) for j in range(self.max_width)])
+        elif os.environ.get('TASK') == 'rel':
+            for ner_span in ner:
+                start, end = ner_span[0], ner_span[1]
+                spans_idx.append((start, end))
 
-        dict_lab = self.get_dict(ner, classes_to_id) if ner else defaultdict(int)
+                # rel_labels need to be [B, num_entity_pairs] -- rewrite above ^
+                # get all span_idx from relations and ner
+                # assign classes to spans as dict
+
+        dict_lab = self.get_dict(ner, classes_to_id) if ner else defaultdict(int)  # {(0, 5): 1, (0, 0): 0, (0, 1): 0, ...}
 
         # 0 for null labels
         span_label = torch.LongTensor([dict_lab[i] for i in spans_idx])
@@ -46,6 +56,8 @@ class InstructBase(nn.Module):
 
         # mask invalid positions
         span_label = span_label.masked_fill(valid_span_mask, -1)
+
+        import ipdb;ipdb.set_trace()
 
         return {
             'tokens': tokens,
