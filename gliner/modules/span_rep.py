@@ -16,6 +16,46 @@ def create_projection_layer(hidden_size: int, dropout: float, out_dim: int = Non
         nn.Linear(out_dim * 4, out_dim)
     )
 
+def extract_elements(sequence, indices):
+    B, L, D = sequence.shape
+    K = indices.shape[1]
+
+    # Expand indices to [B, K, D]
+    expanded_indices = indices.unsqueeze(2).expand(-1, -1, D)
+
+    # Gather the elements
+    extracted_elements = torch.gather(sequence, 1, expanded_indices)
+
+    return extracted_elements
+
+
+class SpanMarkerV0(nn.Module):
+    """
+    Marks and projects span endpoints using an MLP.
+    """
+
+    def __init__(self, hidden_size: int, max_width: int, dropout: float = 0.4):
+        super().__init__()
+        self.max_width = max_width
+        self.project_start = create_projection_layer(hidden_size, dropout)
+        self.project_end = create_projection_layer(hidden_size, dropout)
+
+        self.out_project = create_projection_layer(hidden_size * 2, dropout, hidden_size)
+
+    def forward(self, h: torch.Tensor, span_idx: torch.Tensor) -> torch.Tensor:
+        B, L, D = h.size()
+        # span_idx.shape    ([B, num_possible_spans, 2])
+
+        start_rep = self.project_start(h)  # ([B, L, D])
+        end_rep = self.project_end(h)      # ([B, L, D])
+
+        start_span_rep = extract_elements(start_rep, span_idx[:, :, 0])  # ([B, num_possible_spans, D])
+        end_span_rep = extract_elements(end_rep, span_idx[:, :, 1])      # ([B, num_possible_spans, D])
+
+        cat = torch.cat([start_span_rep, end_span_rep], dim=-1).relu()   # ([B, num_possible_spans, D*2])
+
+        return self.out_project(cat).view(B, L, self.max_width, D)
+    
 
 class SpanQuery(nn.Module):
 
@@ -213,19 +253,6 @@ class ConvShare(nn.Module):
         return self.project(out)
 
 
-def extract_elements(sequence, indices):
-    B, L, D = sequence.shape
-    K = indices.shape[1]
-
-    # Expand indices to [B, K, D]
-    expanded_indices = indices.unsqueeze(2).expand(-1, -1, D)
-
-    # Gather the elements
-    extracted_elements = torch.gather(sequence, 1, expanded_indices)
-
-    return extracted_elements
-
-
 class SpanMarker(nn.Module):
 
     def __init__(self, hidden_size, max_width, dropout=0.4):
@@ -270,33 +297,6 @@ class SpanMarker(nn.Module):
 
         # reshape
         return cat.view(B, L, self.max_width, D)
-
-
-class SpanMarkerV0(nn.Module):
-    """
-    Marks and projects span endpoints using an MLP.
-    """
-
-    def __init__(self, hidden_size: int, max_width: int, dropout: float = 0.4):
-        super().__init__()
-        self.max_width = max_width
-        self.project_start = create_projection_layer(hidden_size, dropout)
-        self.project_end = create_projection_layer(hidden_size, dropout)
-
-        self.out_project = create_projection_layer(hidden_size * 2, dropout, hidden_size)
-
-    def forward(self, h: torch.Tensor, span_idx: torch.Tensor) -> torch.Tensor:
-        B, L, D = h.size()
-
-        start_rep = self.project_start(h)
-        end_rep = self.project_end(h)
-
-        start_span_rep = extract_elements(start_rep, span_idx[:, :, 0])
-        end_span_rep = extract_elements(end_rep, span_idx[:, :, 1])
-
-        cat = torch.cat([start_span_rep, end_span_rep], dim=-1).relu()
-
-        return self.out_project(cat).view(B, L, self.max_width, D)
 
 
 class ConvShareV2(nn.Module):
