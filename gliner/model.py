@@ -125,7 +125,7 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             # store prompt length
             all_len_prompt.append(len(entity_prompt))
 
-        # create a mask using num_classes_all (0, if it exceeds the number of classes, 1 otherwise)
+        # create a mask using num_classes_all (False, if it exceeds the number of classes, True otherwise)
         max_num_classes = max(num_classes_all)
         entity_type_mask = torch.arange(max_num_classes).unsqueeze(0).expand(len(num_classes_all), -1).to(
             x['span_mask'].device)
@@ -160,8 +160,8 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
 
         # compute span representation
         word_rep = self.rnn(word_rep, mask)                  # ([B, seq_length, D])
-        span_rep = self.span_rep_layer(word_rep, span_idx)   # NER --> ([B, seq_length, 12, D]) or REL --> ([B, num_pairs, D])
-        import ipdb;ipdb.set_trace()
+        span_rep = self.span_rep_layer(word_rep, span_idx)   # NER --> ([B, seq_length, 12, D]) 
+                                                             # or REL --> ([B, num_pairs, D])
 
         # compute final entity type representation (FFN)
         entity_type_rep = self.prompt_rep_layer(entity_type_rep)  # (batch_size, len_types, hidden_size)
@@ -171,7 +171,9 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         if os.environ.get('TASK') == 'ner':
             scores = torch.einsum('BLKD,BCD->BLKC', span_rep, entity_type_rep)
         elif os.environ.get('TASK') == 'rel':
-            scores = torch.einsum('BKD,BCD->BKC', span_rep, entity_type_rep)
+            scores = torch.einsum('BKD,BCD->BKC', span_rep, entity_type_rep) # ([B, num_pairs, num_classes])
+
+        # import ipdb;ipdb.set_trace()
 
 
         return scores, num_classes, entity_type_mask   #  ([B, L, K, num_classes]), num_classes, ([B, num_classes])
@@ -183,15 +185,13 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
 
         import ipdb;ipdb.set_trace()
 
-        # if os.environ.get('TASK') == 'ner':
-
         # loss for filtering classifier
         logits_label = scores.view(-1, num_classes)
 
         if os.environ['TASK'] == 'ner':
             labels = x["span_label"].view(-1)    # (batch_size * num_spans)
         elif os.environ['TASK'] == 'rel':
-            labels = x['rel_labels'].view(-1)    # Flatten ground truth labels to [B * num_entity_pairs]
+            labels = x['rel_label'].view(-1)    # Flatten ground truth labels to [B * num_entity_pairs]
 
         mask_label = labels != -1            # (batch_size * num_spans)
         labels.masked_fill_(~mask_label, 0)  # Set the labels of padding tokens to 0
