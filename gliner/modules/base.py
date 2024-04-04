@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 import random
 import os
 
-def generate_entity_pairs_indices(self, span_idx):
+def generate_entity_pairs_indices(span_idx):
     num_entities = span_idx.size(0)  # [num_ents, 2]
 
     # Expand and tile to create all possible pairs
@@ -41,6 +41,7 @@ class InstructBase(nn.Module):
     
     def get_rel_labels(self, relations_idx, relations, rel_label_dict):
         # get the class for each relation pair
+        # TODO: assert that all head-tail position combos are unique
         labelled_rel_dict = {
             (tuple(rel['head']['position']), tuple(rel['tail']['position'])) : rel['relation_text'] for rel in relations
         }
