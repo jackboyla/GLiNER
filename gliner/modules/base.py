@@ -98,10 +98,16 @@ class InstructBase(nn.Module):
 
             # TODO: make sure model generates relations in the same way as generate_entity_pairs_indices()
 
-            unique_rel_labels = set([rel['relation_text'] for rel in relations])
-            rel_label_dict = {r: (i+1) for i, r in enumerate(unique_rel_labels)}
-            # 0 for null labels
-            rel_label = torch.LongTensor(self.get_rel_labels(relations_idx, relations, rel_label_dict))  # [num_ent_pairs]
+            if relations is not None:  # training
+                unique_rel_labels = set([rel['relation_text'] for rel in relations])
+                rel_label_dict = {r: (i+1) for i, r in enumerate(unique_rel_labels)}
+                # 0 for null labels
+                rel_label = torch.LongTensor(self.get_rel_labels(relations_idx, relations, rel_label_dict))  # [num_ent_pairs]
+
+            else:  # no labels --> predict
+                rel_label_dict = defaultdict(int)
+                rel_label = torch.LongTensor([rel_label_dict[i] for i in relations_idx])
+
 
             # mask for valid spans
             valid_span_mask = spans_idx[:, 1] > seq_length - 1
@@ -118,6 +124,7 @@ class InstructBase(nn.Module):
             'seq_length': seq_length,
             'entities': ner,
             'rel_label': rel_label if 'rel_label' in locals() else None,
+            'relations_idx': relations_idx if 'relations_idx' in locals() else None,
         }
         return out
 
@@ -214,6 +221,7 @@ class InstructBase(nn.Module):
             'span_mask': span_label != -1,
             'span_label': span_label,
             'rel_label': rel_label if 'rel_label' in locals() else None,
+            'relations_idx': [el['relations_idx'] for el in batch],
             'entities': [el['entities'] for el in batch],
             'classes_to_id': class_to_ids,
             'id_to_classes': id_to_classes,

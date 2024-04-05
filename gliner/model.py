@@ -16,6 +16,7 @@ from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
+from typing import List, Dict, Union
 
 
 
@@ -169,31 +170,29 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
 
         # similarity score
         if os.environ.get('TASK') == 'ner':
-            scores = torch.einsum('BLKD,BCD->BLKC', span_rep, entity_type_rep)
+            scores = torch.einsum('BLKD,BCD->BLKC', span_rep, entity_type_rep) # ([B, L, K, num_classes])
         elif os.environ.get('TASK') == 'rel':
             scores = torch.einsum('BKD,BCD->BKC', span_rep, entity_type_rep) # ([B, num_pairs, num_classes])
 
-        # import ipdb;ipdb.set_trace()
+        import ipdb;ipdb.set_trace()
 
-
-        return scores, num_classes, entity_type_mask   #  ([B, L, K, num_classes]), num_classes, ([B, num_classes])
+        return scores, num_classes, entity_type_mask   #  see above, num_classes, ([B, num_classes])
 
     def forward(self, x):
         # compute span representation
         scores, num_classes, entity_type_mask = self.compute_score_train(x)
         batch_size = scores.shape[0]
 
-        import ipdb;ipdb.set_trace()
 
         # loss for filtering classifier
         logits_label = scores.view(-1, num_classes)
 
         if os.environ['TASK'] == 'ner':
-            labels = x["span_label"].view(-1)    # (batch_size * num_spans)
+            labels = x["span_label"].view(-1)    # [B * num_spans]
         elif os.environ['TASK'] == 'rel':
-            labels = x['rel_label'].view(-1)    # Flatten ground truth labels to [B * num_entity_pairs]
+            labels = x['rel_label'].view(-1)     # [B * num_entity_pairs]
 
-        mask_label = labels != -1            # (batch_size * num_spans)
+        mask_label = labels != -1
         labels.masked_fill_(~mask_label, 0)  # Set the labels of padding tokens to 0
 
         # one-hot encoding
@@ -214,42 +213,9 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         weight_c = labels_one_hot + 1
         # apply mask
         all_losses = all_losses * mask_label.float() * weight_c
-        return all_losses.sum()
-        
-        # elif os.environ['TASK'] == 'rel':
+        loss = all_losses.sum()
 
-        #     # Assume ground_truth_labels is a tensor of shape [B, num_entity_pairs]
-        #     # where each element is the class index for the relation, or -1 for padding/no relation.
-        #     batch_size, num_entity_pairs, _ = scores.shape
-            
-        #     # Flatten scores and ground_truth_labels to fit into [batch_size * num_entity_pairs, num_classes]
-        #     logits_label = scores.view(-1, num_classes)
-        #     labels = x['rel_labels'].view(-1)  # Flatten ground truth labels to [B * num_entity_pairs]
-
-        #     # Create a mask for valid labels
-        #     mask_label = labels != -1
-        #     labels.masked_fill_(~mask_label, 0)  # Set labels for padding/no relation to 0
-
-        #     # One-hot encoding of labels
-        #     labels_one_hot = torch.zeros(labels.size(0), num_classes, dtype=torch.float32).to(scores.device)
-        #     labels_one_hot.scatter_(1, labels.unsqueeze(1), 1)  # Set corresponding index to 1
-        #     # Shape of labels_one_hot: (batch_size * num_entity_pairs, num_classes)
-
-        #     # Compute loss (without reduction)
-        #     all_losses = F.binary_cross_entropy_with_logits(logits_label, labels_one_hot, reduction='none')
-
-        #     # Mask loss using entity_type_mask, which should match the [B, num_entity_pairs, num_classes] shape when reshaped
-        #     masked_loss = all_losses.view(batch_size, num_entity_pairs, num_classes) * entity_type_mask.unsqueeze(1)
-        #     all_losses = masked_loss.view(-1, num_classes)
-
-        #     # Expand mask_label to cover all classes for each entity pair
-        #     mask_label = mask_label.unsqueeze(-1).expand_as(all_losses)
-
-        #     # put lower loss for in label_one_hot (2 for positive, 1 for negative)
-        #     weight_c = labels_one_hot + 1
-        #     # apply mask
-        #     all_losses = all_losses * mask_label.float() * weight_c
-        #     return all_losses.sum()
+        return loss
 
 
     def compute_score_eval(self, x, device):
@@ -292,33 +258,65 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         entity_type_rep = self.prompt_rep_layer(entity_type_rep)  # (batch_size, len_types, hidden_size)
 
         word_rep = self.rnn(word_rep, mask)
-
         span_rep = self.span_rep_layer(word_rep, span_idx)
 
-        local_scores = torch.einsum('BLKD,BCD->BLKC', span_rep, entity_type_rep)
+        # scores
+        if os.environ['TASK'] == 'ner':
+            local_scores = torch.einsum('BLKD,BCD->BLKC', span_rep, entity_type_rep) # ([B, L, K, num_classes])
+        
+        elif os.environ['TASK'] == 'rel':
+            local_scores = torch.einsum('BKD,BCD->BKC', span_rep, entity_type_rep) # ([B, num_pairs, num_classes])
+        
 
         return local_scores
 
+
     @torch.no_grad()
-    def predict(self, x, flat_ner=False, threshold=0.5):
+    def predict(self, x, flat_ner=False, threshold=0.5, ner=None):
         self.eval()
         local_scores = self.compute_score_eval(x, device=next(self.parameters()).device)
-        spans = []
-        for i, _ in enumerate(x["tokens"]):
-            local_i = local_scores[i]
-            wh_i = [i.tolist() for i in torch.where(torch.sigmoid(local_i) > threshold)]
-            span_i = []
-            for s, k, c in zip(*wh_i):
-                if s + k < len(x["tokens"][i]):
-                    span_i.append((s, s + k, x["id_to_classes"][c + 1], local_i[s, k, c]))
-            span_i = greedy_search(span_i, flat_ner)
-            spans.append(span_i)
-        return spans
 
-    def predict_entities(self, text, labels, flat_ner=True, threshold=0.5):
-        return self.batch_predict_entities([text], labels, flat_ner=flat_ner, threshold=threshold)[0]
+        if os.environ['TASK'] == 'ner':
+            spans = []
+            for i, _ in enumerate(x["tokens"]):
+                local_i = local_scores[i]
+                wh_i = [i.tolist() for i in torch.where(torch.sigmoid(local_i) > threshold)]
+                span_i = []
+                for s, k, c in zip(*wh_i):
+                    if s + k < len(x["tokens"][i]):
+                        span_i.append((s, s + k, x["id_to_classes"][c + 1], local_i[s, k, c]))
+                span_i = greedy_search(span_i, flat_ner)
+                spans.append(span_i)
+            return spans
+        
+        elif os.environ['TASK'] == 'rel':
+            '''
+            x should have tokens and NER spans
+            and return a list of relations with their score
+            '''
+            assert isinstance(ner, list), "ner should be a list of list of spans like [[(1, 2, 'PER'), (3, 4, 'ORG'), ...], ]"
 
-    def batch_predict_entities(self, texts, labels, flat_ner=True, threshold=0.5):
+            rels = []
+            for i, _ in enumerate(x["tokens"]):
+                local_i = local_scores[i]  # Predictions for the i-th item in the batch
+                probabilities = torch.sigmoid(local_i)  # Convert logits to probabilities
+
+                # Iterate over all possible pairs and relation types
+                triggered_relations = [i.tolist() for i in torch.where(probabilities > threshold)]
+                for pair_idx, rel_type_idx in zip(*triggered_relations):
+
+                    score = probabilities[pair_idx, rel_type_idx].item()
+                    # Get the entity pair and relation type
+                    entity_pair = x["relations_idx"][i][pair_idx] 
+                    relation_type = x["id_to_classes"][rel_type_idx + 1]
+                 
+                    rels.append((entity_pair.cpu().numpy().tolist(), relation_type, score))
+            return rels
+
+    def predict_entities(self, text, labels, flat_ner=True, threshold=0.5, ner=None):
+        return self.batch_predict_entities([text], labels, flat_ner=flat_ner, threshold=threshold, ner=[ner])[0]
+
+    def batch_predict_entities(self, texts, labels, flat_ner=True, threshold=0.5, ner=None):
         """
         Predict entities for a batch of texts.
         texts:  List of texts | List[str]
@@ -343,26 +341,58 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             all_end_token_idx_to_text_idx.append(end_token_idx_to_text_idx)
 
         input_x = [{"tokenized_text": tk, "ner": None} for tk in all_tokens]
+        if ner is not None:
+            span_to_ner = []
+            for n in ner:   # a lookup table for output
+                span_to_ner.append({(start, end): text for start, end, label, text in n})
+            for i, x in enumerate(input_x):
+                x['ner'] = ner[i]
         x = self.collate_fn(input_x, labels)
-        outputs = self.predict(x, flat_ner=flat_ner, threshold=threshold)
+        
+        outputs = self.predict(x, flat_ner=flat_ner, threshold=threshold, ner=ner)
 
-        all_entities = []
-        for i, output in enumerate(outputs):
-            start_token_idx_to_text_idx = all_start_token_idx_to_text_idx[i]
-            end_token_idx_to_text_idx = all_end_token_idx_to_text_idx[i]
-            entities = []
-            for start_token_idx, end_token_idx, ent_type in output:
-                start_text_idx = start_token_idx_to_text_idx[start_token_idx]
-                end_text_idx = end_token_idx_to_text_idx[end_token_idx]
-                entities.append({
-                    "start": start_token_idx_to_text_idx[start_token_idx],
-                    "end": end_token_idx_to_text_idx[end_token_idx],
-                    "text": texts[i][start_text_idx:end_text_idx],
-                    "label": ent_type,
-                })
-            all_entities.append(entities)
+        if os.environ['TASK'] == 'ner':
+            all_entities = []
+            for i, output in enumerate(outputs):
+                start_token_idx_to_text_idx = all_start_token_idx_to_text_idx[i]
+                end_token_idx_to_text_idx = all_end_token_idx_to_text_idx[i]
+                entities = []
+                for start_token_idx, end_token_idx, ent_type in output:
+                    start_text_idx = start_token_idx_to_text_idx[start_token_idx]
+                    end_text_idx = end_token_idx_to_text_idx[end_token_idx]
+                    entities.append({
+                        "start": start_token_idx_to_text_idx[start_token_idx],
+                        "end": end_token_idx_to_text_idx[end_token_idx],
+                        "text": texts[i][start_text_idx:end_text_idx],
+                        "label": ent_type,
+                    })
+                all_entities.append(entities)
 
-        return all_entities
+            return all_entities
+        
+        elif os.environ['TASK'] == 'rel':
+            all_relations = []
+
+            for i, output in enumerate(outputs):
+                    
+                rels = []
+                for head_pos, tail_pos, pred_label, score in output:
+
+                    rel = {
+                        'head_pos' : head_pos,
+                        'tail_pos' : tail_pos,
+                        'head_text' : span_to_ner[i][head_pos],
+                        'tail_text' : span_to_ner[i][tail_pos],
+                        'label': pred_label,
+                        'score': score,
+                    }
+                    
+                    rels.append(rel)
+
+                all_relations.append(rels)
+
+            return all_relations
+
 
     def evaluate(self, test_data, flat_ner=False, threshold=0.5, batch_size=12, entity_types=None):
         self.eval()

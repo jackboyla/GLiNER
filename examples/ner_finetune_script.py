@@ -54,7 +54,6 @@ train_loader = model.create_dataloader(data, batch_size=5, shuffle=False)
 iter_train_loader = iter(train_loader)
 x = next(iter_train_loader)
 
-# import ipdb;ipdb.set_trace()
 
 loss = model(x)
 loss
