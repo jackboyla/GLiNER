@@ -83,3 +83,21 @@ class RelMarkerv0(nn.Module):
 
 
         return combined_pairs_out
+
+
+class RelRepLayer(nn.Module):
+    """
+    Various span representation approaches
+    """
+
+    def __init__(self, hidden_size, max_width, rel_mode, **kwargs):
+        super().__init__()
+
+        if rel_mode == 'marker':
+            self.rel_rep_layer = RelMarkerv0(hidden_size, max_width, **kwargs)
+        else:
+            raise ValueError(f'Unknown rel mode {rel_mode}')
+
+    def forward(self, x, *args):
+
+        return self.rel_rep_layer(x, *args)
