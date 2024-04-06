@@ -11,6 +11,7 @@ from gliner.modules.layers import LstmSeq2SeqEncoder
 from gliner.modules.base import InstructBase
 from gliner.modules.evaluator import Evaluator, greedy_search
 from gliner.modules.span_rep import SpanRepLayer
+from gliner.modules.rel_rep import RelRepLayer
 from gliner.modules.token_rep import TokenRepLayer
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
@@ -44,15 +45,23 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             bidirectional=True,
         )
 
-        # span representation
-        # we have a paper to study span representation for ner
-        # zaratiana et al, 2022: https://aclanthology.org/2022.umios-1.1/
-        self.span_rep_layer = SpanRepLayer(
-            span_mode=config.span_mode,
-            hidden_size=config.hidden_size,
-            max_width=config.max_width,
-            dropout=config.dropout,
-        )
+        if os.environ.get('TASK') == 'ner':
+            # span representation
+            # we have a paper to study span representation for ner
+            # zaratiana et al, 2022: https://aclanthology.org/2022.umios-1.1/
+            self.span_rep_layer = SpanRepLayer(
+                span_mode=config.span_mode,
+                hidden_size=config.hidden_size,
+                max_width=config.max_width,
+                dropout=config.dropout,
+            )
+        elif os.environ.get('TASK') == 'rel':
+            self.span_rep_layer = RelRepLayer(
+                rel_mode=config.span_mode,
+                hidden_size=config.hidden_size,
+                max_width=config.max_width,
+                dropout=config.dropout,
+            )
 
         # prompt representation (FFN)
         self.prompt_rep_layer = nn.Sequential(
@@ -174,8 +183,6 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         elif os.environ.get('TASK') == 'rel':
             scores = torch.einsum('BKD,BCD->BKC', span_rep, entity_type_rep) # ([B, num_pairs, num_classes])
 
-        import ipdb;ipdb.set_trace()
-
         return scores, num_classes, entity_type_mask   #  see above, num_classes, ([B, num_classes])
 
     def forward(self, x):
@@ -197,8 +204,8 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
 
         # one-hot encoding
         labels_one_hot = torch.zeros(labels.size(0), num_classes + 1, dtype=torch.float32).to(scores.device) # ([batch_size * num_spans, num_classes + 1])
-        labels_one_hot.scatter_(1, labels.unsqueeze(1), 1)  # Set the corresponding index to 1  why??
-        labels_one_hot = labels_one_hot[:, 1:]              # Remove the first column           why??
+        labels_one_hot.scatter_(1, labels.unsqueeze(1), 1)  # Set the corresponding index to 1
+        labels_one_hot = labels_one_hot[:, 1:]              # Remove the first column
         # Shape of labels_one_hot: (batch_size * num_spans, num_classes)
 
         # compute loss (without reduction)
@@ -290,19 +297,21 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             return spans
         
         elif os.environ['TASK'] == 'rel':
-            '''
-            x should have tokens and NER spans
-            and return a list of relations with their score
-            '''
+
             assert isinstance(ner, list), "ner should be a list of list of spans like [[(1, 2, 'PER'), (3, 4, 'ORG'), ...], ]"
 
             rels = []
             for i, _ in enumerate(x["tokens"]):
                 local_i = local_scores[i]  # Predictions for the i-th item in the batch
+                # shape ([num_pairs, num_classes])
                 probabilities = torch.sigmoid(local_i)  # Convert logits to probabilities
 
                 # Iterate over all possible pairs and relation types
                 triggered_relations = [i.tolist() for i in torch.where(probabilities > threshold)]
+                # triggered_relations --> tuple of two lists, 
+                # one for pair_idx * num_triggered_classes (based on threshold) 
+                # and one for the corresponding tirggered rel_type_id, e.g pair [3, 3, 3] have rel type [0, 4, 5]
+                rels_i = []
                 for pair_idx, rel_type_idx in zip(*triggered_relations):
 
                     score = probabilities[pair_idx, rel_type_idx].item()
@@ -310,7 +319,8 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
                     entity_pair = x["relations_idx"][i][pair_idx] 
                     relation_type = x["id_to_classes"][rel_type_idx + 1]
                  
-                    rels.append((entity_pair.cpu().numpy().tolist(), relation_type, score))
+                    rels_i.append((entity_pair.cpu().numpy().tolist(), relation_type, score))
+                rels.append(rels_i)
             return rels
 
     def predict_entities(self, text, labels, flat_ner=True, threshold=0.5, ner=None):
@@ -373,16 +383,17 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
         elif os.environ['TASK'] == 'rel':
             all_relations = []
 
+            rels = []
             for i, output in enumerate(outputs):
-                    
-                rels = []
-                for head_pos, tail_pos, pred_label, score in output:
+
+                
+                for (head_pos, tail_pos), pred_label, score in output:
 
                     rel = {
                         'head_pos' : head_pos,
                         'tail_pos' : tail_pos,
-                        'head_text' : span_to_ner[i][head_pos],
-                        'tail_text' : span_to_ner[i][tail_pos],
+                        'head_text' : texts[i][head_pos[0]:head_pos[1]],
+                        'tail_text' : texts[i][tail_pos[0]:tail_pos[1]],
                         'label': pred_label,
                         'score': score,
                     }
