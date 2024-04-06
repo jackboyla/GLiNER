@@ -10,7 +10,15 @@ from gliner import GLiNER
 from gliner.modules.run_evaluation import sample_train_data
 from gliner.model import load_config_as_namespace
 import json
+import logging
 
+logger = logging.getLogger(__name__)
+
+'''
+
+python train.py --config config_small_rel.yaml --relation_extraction
+
+'''
 
 # train function
 def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir="logs", warmup_ratio=0.1,
@@ -18,7 +26,7 @@ def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=
     model.train()
 
     # initialize data loaders
-    train_loader = model.create_dataloader(train_data, batch_size=train_batch_size, shuffle=True)
+    train_loader = model.create_dataloader(train_data, batch_size=train_batch_size, shuffle=False)
 
     pbar = tqdm(range(num_steps))
 
@@ -48,7 +56,8 @@ def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=
 
         try:
             loss = model(x)  # Forward pass
-        except:
+        except Exception as e:
+            logger.error(f"Error in step {step}: {e}")
             continue
 
         # check if loss is nan
@@ -77,6 +86,7 @@ def create_parser():
     parser = argparse.ArgumentParser(description="Span-based NER")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
     parser.add_argument('--log_dir', type=str, default='logs', help='Path to the log directory')
+    parser.add_argument("--relation_extraction", action="store_true", help="Activate relation extraction mode")
     return parser
 
 
@@ -85,14 +95,26 @@ if __name__ == "__main__":
     parser = create_parser()
     args = parser.parse_args()
 
+    if args.relation_extraction is True:
+        os.environ['TASK'] = 'rel'
+        logger.info("🚀 Relation extraction mode activated")
+    else:
+        os.environ['TASK'] = 'ner'
+
     # load config
     config = load_config_as_namespace(args.config)
 
     config.log_dir = args.log_dir
 
     try:
-        with open(config.train_data, 'r') as f:
-            data = json.load(f)
+        if config.train_data.endswith('.jsonl'):
+            with open(config.train_data, 'r') as f:
+                data = [json.loads(line) for line in f]
+        elif config.train_data.endswith('.json'):
+            with open(config.train_data, 'r') as f:
+                data = json.load(f)
+        else:
+            raise ValueError(f"Invalid data format: {config.train_data}")
     except:
         data = sample_train_data(config.train_data, 10000)
 
