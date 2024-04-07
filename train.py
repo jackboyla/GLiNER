@@ -141,6 +141,10 @@ if __name__ == "__main__":
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+    ######### DEBUG
+    data = data[:2]
+    ###############
+
     train(model, optimizer, data, num_steps=config.num_steps, eval_every=config.eval_every,
           log_dir=config.log_dir, warmup_ratio=config.warmup_ratio, train_batch_size=config.train_batch_size,
           device=device)
