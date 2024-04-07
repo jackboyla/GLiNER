@@ -14,6 +14,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()])
+
 '''
 
 python train.py --config config_small_rel.yaml --relation_extraction
@@ -23,6 +27,19 @@ python train.py --config config_small_rel.yaml --relation_extraction
 # train function
 def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir="logs", warmup_ratio=0.1,
           train_batch_size=8, device='cuda'):
+    
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    # set up logging
+    log_file = "train.log"
+    log_file_path = os.path.join(log_dir, log_file)
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
     model.train()
 
     # initialize data loaders
