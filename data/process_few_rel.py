@@ -53,7 +53,8 @@ for i in range(len(data['relation'])):
 
     transformed_data.append({
         "ner": ner_entries,
-        "relations": relations
+        "relations": relations,
+        "tokenized_text": tokens,
     })
 
 import json
