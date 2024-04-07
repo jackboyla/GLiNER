@@ -7,6 +7,15 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 import random
 import os
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()])
+
 
 def generate_entity_pairs_indices(span_idx):
     num_entities = span_idx.size(0)  # [num_ents, 2]
@@ -65,6 +74,7 @@ class InstructBase(nn.Module):
         max_len = self.base_config.max_len
 
         if len(tokens) > max_len:
+            logger.warn(f"Token length {len(tokens)} is longer than max length {max_len}. Truncating.")
             seq_length = max_len
             tokens = tokens[:max_len]
         else:
