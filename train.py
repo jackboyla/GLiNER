@@ -10,7 +10,9 @@ from gliner import GLiNER
 from gliner.modules.run_evaluation import sample_train_data
 from gliner.model import load_config_as_namespace
 import json
+import wandb
 import logging
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,14 @@ python train.py --config config_small_rel.yaml --relation_extraction
 # train function
 def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir="logs", warmup_ratio=0.1,
           train_batch_size=8, device='cuda'):
+    
+    if 'WANDB_API_KEY' in os.environ:
+        # Start a W&B Run with wandb.init
+        wandb.login()
+        run = wandb.init(project="GLiREL")
+    else:
+        logger.info('WANDB_API_KEY not found. W&B logging disabled.')
+        run = None
     
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -87,6 +97,9 @@ def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=
         optimizer.zero_grad()  # Reset gradients
 
         description = f"step: {step} | epoch: {step // len(train_loader)} | loss: {loss.item():.2f}"
+
+        if run is not None:
+            run.log({"loss": loss.item()})
 
         if (step + 1) % eval_every == 0:
             current_path = os.path.join(log_dir, f'model_{step + 1}')
@@ -158,9 +171,9 @@ if __name__ == "__main__":
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    ######### DEBUG
-    data = data[:2]
-    ###############
+    # ######### DEBUG
+    # data = data[:2]
+    # ###############
 
     train(model, optimizer, data, num_steps=config.num_steps, eval_every=config.eval_every,
           log_dir=config.log_dir, warmup_ratio=config.warmup_ratio, train_batch_size=config.train_batch_size,
