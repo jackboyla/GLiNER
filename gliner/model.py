@@ -342,10 +342,13 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             tokens = []
             start_token_idx_to_text_idx = []
             end_token_idx_to_text_idx = []
-            for match in re.finditer(r'\w+(?:[-_]\w+)*|\S', text):
-                tokens.append(match.group())
-                start_token_idx_to_text_idx.append(match.start())
-                end_token_idx_to_text_idx.append(match.end())
+            if type(text) is str:
+                for match in re.finditer(r'\w+(?:[-_]\w+)*|\S', text):
+                    tokens.append(match.group())
+                    start_token_idx_to_text_idx.append(match.start())
+                    end_token_idx_to_text_idx.append(match.end())
+            else:
+                tokens = text  # already tokenized
             all_tokens.append(tokens)
             all_start_token_idx_to_text_idx.append(start_token_idx_to_text_idx)
             all_end_token_idx_to_text_idx.append(end_token_idx_to_text_idx)
