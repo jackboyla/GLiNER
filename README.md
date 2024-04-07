@@ -6,8 +6,6 @@ GLiNER is a Named Entity Recognition (NER) model capable of identifying any enti
 * Demo: https://huggingface.co/spaces/tomaarsen/gliner_base
 * Colab: https://colab.research.google.com/drive/1mhalKWzmfSTqMnR0wQBZvt9-ktTsATHB?usp=sharing
 
-https://github.com/jackboyla/GLiNER/blob/main/train.ipynb
-
 * Train Zero-shot: <a href="https://colab.research.google.com/github/jackboyla/GLiNER/blob/main/train.ipynb" target="_blank">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
