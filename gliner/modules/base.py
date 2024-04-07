@@ -48,24 +48,28 @@ class InstructBase(nn.Module):
                 dict_tag[(span[0], span[1])] = classes_to_id[span[2]]
         return dict_tag
     
-    def get_rel_labels(self, relations_idx, relations, rel_label_dict):
+    def get_rel_dict(self, relations, classes_to_id):
+        dict_tag = defaultdict(int)
+        for rel in relations:
+            if rel['relation_text'] in classes_to_id:
+                dict_tag[(tuple(rel['head']['position']), tuple(rel['tail']['position']))] = classes_to_id[rel['relation_text']]
+        return dict_tag
+    
+    def get_rel_labels(self, relations_idx, rel_label_dict):
         # get the class for each relation pair
-        # TODO: assert that all head-tail position combos are unique
-        labelled_rel_dict = {
-            (tuple(rel['head']['position']), tuple(rel['tail']['position'])) : rel['relation_text'] for rel in relations
-        }
+
         relations_idx = relations_idx.tolist()
 
-        # assign label if in dataset else -1
+        # assign label if in dataset else 0
         rel_labels = []
         for rel in relations_idx:
             head_idx, tail_idx = tuple(rel[0]), tuple(rel[1])
-            if (head_idx, tail_idx) in labelled_rel_dict:
-                label = rel_label_dict[labelled_rel_dict[(head_idx, tail_idx)]]
+            if (head_idx, tail_idx) in rel_label_dict:
+                label = rel_label_dict[rel_label_dict[(head_idx, tail_idx)]]
                 rel_labels.append(label)
             else:
                 rel_labels.append(0)
-        
+
         return rel_labels
     
 
@@ -103,16 +107,16 @@ class InstructBase(nn.Module):
                 start, end = ner_span[0], ner_span[1]
                 spans_idx.append((start, end))
             
-            spans_idx = torch.LongTensor(spans_idx)                        # [num_possible_spans, 2]
+            spans_idx = torch.LongTensor(spans_idx)                   # [num_possible_spans, 2]
             relations_idx = generate_entity_pairs_indices(spans_idx)  # [num_ent_pairs, 2, 2]
 
             # TODO: make sure model generates relations in the same way as generate_entity_pairs_indices()
 
             if relations is not None:  # training
-                unique_rel_labels = set([rel['relation_text'] for rel in relations])
-                rel_label_dict = {r: (i+1) for i, r in enumerate(unique_rel_labels)}
+                # get the class for each relation pair
+                rel_label_dict = self.get_rel_dict(relations, classes_to_id)
                 # 0 for null labels
-                rel_label = torch.LongTensor(self.get_rel_labels(relations_idx, relations, rel_label_dict))  # [num_ent_pairs]
+                rel_label = torch.LongTensor(self.get_rel_labels(relations_idx, rel_label_dict))  # [num_ent_pairs]
 
             else:  # no labels --> predict
                 rel_label_dict = defaultdict(int)
@@ -125,6 +129,10 @@ class InstructBase(nn.Module):
             # mask invalid positions
             span_label = torch.ones(spans_idx.size(0), dtype=torch.long)
             span_label = span_label.masked_fill(valid_span_mask, -1)  # [num_possible_spans]
+
+            # mask for valid relations
+            valid_rel_mask = relations_idx[:, 1, 1] > seq_length - 1
+            rel_label = rel_label.masked_fill(valid_rel_mask, -1)
 
 
         out = {
@@ -144,7 +152,6 @@ class InstructBase(nn.Module):
             if os.environ['TASK'] == 'ner':
                 negs = self.get_negatives(batch_list, 100)
             elif os.environ['TASK'] == 'rel':
-                # TODO: add negatives for relations
                 negs = self.get_negatives_rel(batch_list, 100)
             class_to_ids = []
             id_to_classes = []
@@ -174,6 +181,7 @@ class InstructBase(nn.Module):
                     # this is the list of all possible entity types (positive and negative)
                     types = list(set([el[2] for el in b['ner']] + negs_i))
                 elif os.environ['TASK'] == 'rel':
+                    # this is the list of all possible relation types (positive and negative)
                     types = list(set([el['relation_text'] for el in b['relations']] + negs_i))
 
 
