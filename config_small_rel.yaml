@@ -6,7 +6,7 @@ lr_others: 5e-5
 num_steps: 100    # 30000
 warmup_ratio: 0.1
 train_batch_size: 2
-eval_every: 5000
+eval_every: 25
 
 # Model Configuration
 max_width: 12
