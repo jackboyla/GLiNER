@@ -4,7 +4,7 @@ lr_others: 5e-5
 
 # Training Parameters
 num_steps: 100    # 30000
-warmup_ratio: 0.1
+warmup_ratio: 0.05
 train_batch_size: 2
 eval_every: 25
 
@@ -15,7 +15,7 @@ fine_tune: true
 subtoken_pooling: first
 hidden_size: 768
 span_mode: marker
-dropout: 0.3
+dropout: 0.1
 
 # Directory Paths
 root_dir: ablation_backbone
@@ -28,7 +28,7 @@ prev_path: "none"
 # Training Specifics
 size_sup: -1
 max_types: 25
-shuffle_types: true
+shuffle_types: false  #true
 random_drop: false # true
 max_neg_type_ratio: 0   # 1
 max_len: 384
