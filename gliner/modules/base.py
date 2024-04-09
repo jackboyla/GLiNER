@@ -147,6 +147,7 @@ class InstructBase(nn.Module):
             'span_label': span_label,
             'seq_length': seq_length,
             'entities': ner,
+            'relations': relations if 'relations' in locals() else None,
             'rel_label': rel_label if 'rel_label' in locals() else None,
             'relations_idx': relations_idx if 'relations_idx' in locals() else None,
         }
@@ -159,50 +160,60 @@ class InstructBase(nn.Module):
                 negs = self.get_negatives(batch_list, 100)
             elif os.environ['TASK'] == 'rel':
                 negs = self.get_negatives_rel(batch_list, 100)
+                # negs = self.get_negatives_rel(relation_types, 100)
             class_to_ids = []
             id_to_classes = []
             for b in batch_list:
                 # negs = b["negative"]
                 random.shuffle(negs)
 
-                # negs = negs[:sampled_neg]
-                max_neg_type_ratio = int(self.base_config.max_neg_type_ratio)
-
-                if max_neg_type_ratio == 0:
-                    # no negatives
-                    neg_type_ratio = 0
-                else:
-                    neg_type_ratio = random.randint(0, max_neg_type_ratio)
-
-                if neg_type_ratio == 0:
-                    # no negatives
-                    negs_i = []
-                else:
-                    if os.environ['TASK'] == 'ner':
-                        negs_i = negs[:len(b['ner']) * neg_type_ratio]
-                    elif os.environ['TASK'] == 'rel':
-                        negs_i = negs[:len(b['relations']) * neg_type_ratio]
-                    
                 if os.environ['TASK'] == 'ner':
+                    # negs = negs[:sampled_neg]
+                    max_neg_type_ratio = int(self.base_config.max_neg_type_ratio)
+
+                    if max_neg_type_ratio == 0:
+                        # no negatives
+                        neg_type_ratio = 0
+                    else:
+                        neg_type_ratio = random.randint(0, max_neg_type_ratio)
+
+                    if neg_type_ratio == 0:
+                        # no negatives
+                        negs_i = []
+                        negs_i = negs[:len(b['ner']) * neg_type_ratio]
+                    
                     # this is the list of all possible entity types (positive and negative)
                     types = list(set([el[2] for el in b['ner']] + negs_i))
+
+
+                    if len(types) != 0:
+                        # prob of higher number shoul
+                        # random drop
+                        if self.base_config.random_drop:
+                            num_ents = random.randint(1, len(types))
+                            types = types[:num_ents]
+
+                    # maximum number of entities types
+                    types = types[:int(self.base_config.max_types)]
+
+
                 elif os.environ['TASK'] == 'rel':
+
+                    positive_types = [el['relation_text'] for el in b['relations']]
+
+                    # make up to max_types using as many negatives as needed (none if there's already enough positives)
+                    remainder_relations = max(0, int(self.base_config.max_types) - len(b['relations']))
+                    negs_i = [negative for negative in negs if negative not in positive_types][:remainder_relations]
+
                     # this is the list of all possible relation types (positive and negative)
-                    types = list(set([el['relation_text'] for el in b['relations']] + negs_i))
+                    types = list(set(positive_types + negs_i))
+                    if len(types) < self.base_config.max_types:
+                        logger.warn(f"Relation types less than max_types: {len(types)} < {self.base_config.max_types}")
 
 
                 # shuffle (every epoch)
                 random.shuffle(types)
 
-                if len(types) != 0:
-                    # prob of higher number shoul
-                    # random drop
-                    if self.base_config.random_drop:
-                        num_ents = random.randint(1, len(types))
-                        types = types[:num_ents]
-
-                # maximum number of entities types
-                types = types[:int(self.base_config.max_types)]
 
                 # supervised training
                 if "label" in b:
@@ -247,6 +258,7 @@ class InstructBase(nn.Module):
             'rel_label': rel_label if 'rel_label' in locals() else None,
             'relations_idx': [el['relations_idx'] for el in batch],
             'entities': [el['entities'] for el in batch],
+            'relations': [el.get('relations') for el in batch],
             'classes_to_id': class_to_ids,
             'id_to_classes': id_to_classes,
         }
@@ -263,7 +275,7 @@ class InstructBase(nn.Module):
         return ent_types[:sampled_neg]
     
     @staticmethod
-    def get_negatives_rel(batch_list, sampled_neg=5):
+    def get_negatives_rel(batch_list, sampled_neg=100):
         rel_types = []
         for b in batch_list:
             types = set([el['relation_text'] for el in b['relations']])
