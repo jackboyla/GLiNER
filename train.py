@@ -9,8 +9,8 @@ from transformers import get_cosine_schedule_with_warmup
 from gliner import GLiNER
 from gliner.modules.run_evaluation import sample_train_data
 from gliner.model import load_config_as_namespace
+from datetime import datetime
 import json
-import wandb
 import logging
 
 
@@ -27,16 +27,20 @@ python train.py --config config_small_rel.yaml --relation_extraction
 '''
 
 # train function
-def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir="logs", wandb_log=False, warmup_ratio=0.1,
+def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=None, wandb_log=False, warmup_ratio=0.1,
           train_batch_size=8, device='cuda'):
     
     if wandb_log:
+        import wandb
         # Start a W&B Run with wandb.init
         wandb.login()
         run = wandb.init(project="GLiREL")
     else:
         run = None
     
+    if log_dir is None:
+        current_time = datetime.now().strftime("%Y-%m-%d--%H-%M-%S")
+        log_dir = f'logs/log-{current_time}'
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
@@ -86,6 +90,9 @@ def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=
             logger.error(f"Error in step {step}: {e}")
             continue
 
+        logger.info(f"Step {step} | x['rel_label']: {x['rel_label'].shape} | x['tokens']: {len(x['tokens'])} | x['span_idx']: {x['span_idx'].shape} | loss: {loss.item()}")
+        
+
         # check if loss is nan
         if torch.isnan(loss):
             continue
@@ -114,7 +121,7 @@ def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=
 def create_parser():
     parser = argparse.ArgumentParser(description="Span-based NER")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
-    parser.add_argument('--log_dir', type=str, default='logs', help='Path to the log directory')
+    parser.add_argument('--log_dir', type=str, default=None, help='Path to the log directory')
     parser.add_argument("--relation_extraction", action="store_true", help="Activate relation extraction mode")
     parser.add_argument("--wandb_log", action="store_true", help="Activate wandb logging")
     return parser
