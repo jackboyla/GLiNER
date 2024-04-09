@@ -1,6 +1,7 @@
 from collections import defaultdict
 
 import numpy as np
+import os
 import torch
 from seqeval.metrics.v1 import _prf_divide
 
@@ -9,10 +10,17 @@ def extract_tp_actual_correct(y_true, y_pred):
     entities_true = defaultdict(set)
     entities_pred = defaultdict(set)
 
-    for type_name, (start, end), idx in y_true:
-        entities_true[type_name].add((start, end, idx))
-    for type_name, (start, end), idx in y_pred:
-        entities_pred[type_name].add((start, end, idx))
+    if os.environ['TASK'] == 'ner':
+        for type_name, (start, end), idx in y_true:
+            entities_true[type_name].add((start, end, idx))
+        for type_name, (start, end), idx in y_pred:
+            entities_pred[type_name].add((start, end, idx))
+
+    elif os.environ['TASK'] == 'rel':
+        for type_name, head, tail, idx in y_true:
+            entities_true[type_name].add((head, tail, idx))
+        for type_name, head, tail, idx in y_pred:
+            entities_pred[type_name].add((head, tail, idx))
 
     target_names = sorted(set(entities_true.keys()) | set(entities_pred.keys()))
 
@@ -97,6 +105,41 @@ class Evaluator:
             e = self.get_entities_fr(j)
             all_outs_ent.append(e)
         return all_true_ent, all_outs_ent
+
+    @torch.no_grad()
+    def evaluate(self):
+        all_true_typed, all_outs_typed = self.transform_data()
+        precision, recall, f1 = compute_prf(all_true_typed, all_outs_typed).values()
+        output_str = f"P: {precision:.2%}\tR: {recall:.2%}\tF1: {f1:.2%}\n"
+        return output_str, f1
+
+
+class RelEvaluator:
+    def __init__(self, all_true, all_outs):
+        self.all_true = all_true
+        self.all_outs = all_outs
+
+    def get_relations_fr(self, rels):
+        all_rels = []
+        for r in rels:
+            all_rels.append(
+                [
+                    r['relation_text'], 
+                    tuple(r['head']['position']), 
+                    tuple(r['tail']['position'])
+                ]
+            )
+        return all_rels
+
+    def transform_data(self):
+        all_true_rel = []
+        all_outs_rel = []
+        for i, j in zip(self.all_true, self.all_outs):
+            e = self.get_relations_fr(i)
+            all_true_rel.append(e)
+            e = self.get_relations_fr(j)
+            all_outs_rel.append(e)
+        return all_true_rel, all_outs_rel
 
     @torch.no_grad()
     def evaluate(self):
