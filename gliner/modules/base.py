@@ -24,13 +24,20 @@ def generate_entity_pairs_indices(span_idx):
     span_idx_expanded = span_idx.unsqueeze(1).expand(-1, num_entities, -1)  #  ([num_entities, num_entities, 2])
     span_idx_tiled = span_idx.unsqueeze(0).expand(num_entities, -1, -1)     #  ([num_entities, num_entities, 2])
 
-    # pair_reps = torch.cat([span_idx_expanded, span_idx_tiled], dim=2)
+    # we now need a mask to exclude self-pairs
+    indices = torch.arange(num_entities)
+    indices_expanded = indices.unsqueeze(1).expand(-1, num_entities)
+    indices_tiled = indices.unsqueeze(0).expand(num_entities, -1)
+    # Create a mask to filter out self-pairs
+    self_pair_mask = indices_expanded != indices_tiled
 
-    # Now, we need to filter out the self-pairs and duplicates. We use an upper triangular mask for this
-    triu_mask = torch.triu(torch.ones(num_entities, num_entities), diagonal=1).bool()  #  ([ num_entities, num_entities ])
+    # Apply the mask to filter out self-pairs
+    span_idx_expanded_filtered = span_idx_expanded[self_pair_mask]  #  ([num_unique_pairs, 2])
+    span_idx_tiled_filtered = span_idx_tiled[self_pair_mask]        #  ([num_unique_pairs, 2])
 
-    # num_unique_pairs is the total number of unique pairs that can be formed from num_entities, excluding self-pairs
-    combined_pairs = torch.stack((span_idx_expanded[triu_mask], span_idx_tiled[triu_mask]), dim=1)  
+
+    # Stack the pairs back in shape [num_pairs, 2, 2]
+    combined_pairs = torch.stack((span_idx_expanded_filtered, span_idx_tiled_filtered), dim=1)
 
     return combined_pairs  #  ([num_unique_pairs, 2 ->start_index, 2 ->end_index])
 
@@ -65,7 +72,7 @@ class InstructBase(nn.Module):
         for rel in relations_idx:
             head_idx, tail_idx = tuple(rel[0]), tuple(rel[1])
             if (head_idx, tail_idx) in rel_label_dict:
-                label = rel_label_dict[rel_label_dict[(head_idx, tail_idx)]]
+                label = rel_label_dict[(head_idx, tail_idx)]
                 rel_labels.append(label)
             else:
                 rel_labels.append(0)
@@ -103,14 +110,13 @@ class InstructBase(nn.Module):
 
 
         elif os.environ.get('TASK') == 'rel':
+            # TODO: test this!!
             for ner_span in ner:
                 start, end = ner_span[0], ner_span[1]
                 spans_idx.append((start, end))
             
             spans_idx = torch.LongTensor(spans_idx)                   # [num_possible_spans, 2]
             relations_idx = generate_entity_pairs_indices(spans_idx)  # [num_ent_pairs, 2, 2]
-
-            # TODO: make sure model generates relations in the same way as generate_entity_pairs_indices()
 
             if relations is not None:  # training
                 # get the class for each relation pair
