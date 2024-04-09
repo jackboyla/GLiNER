@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import yaml
 from gliner.modules.layers import LstmSeq2SeqEncoder
 from gliner.modules.base import InstructBase
-from gliner.modules.evaluator import Evaluator, greedy_search
+from gliner.modules.evaluator import Evaluator, greedy_search, RelEvaluator
 from gliner.modules.span_rep import SpanRepLayer
 from gliner.modules.rel_rep import RelRepLayer
 from gliner.modules.token_rep import TokenRepLayer
@@ -355,11 +355,9 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
 
         input_x = [{"tokenized_text": tk, "ner": None} for tk in all_tokens]
         if ner is not None:
-            span_to_ner = []
-            for n in ner:   # a lookup table for output
-                span_to_ner.append({(start, end): text for start, end, label, text in n})
             for i, x in enumerate(input_x):
                 x['ner'] = ner[i]
+
         x = self.collate_fn(input_x, labels)
         
         outputs = self.predict(x, flat_ner=flat_ner, threshold=threshold, ner=ner)
@@ -418,12 +416,50 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             for k, v in x.items():
                 if isinstance(v, torch.Tensor):
                     x[k] = v.to(device)
-            batch_predictions = self.predict(x, flat_ner, threshold)
-            all_preds.extend(batch_predictions)
-            all_trues.extend(x["entities"])
-        evaluator = Evaluator(all_trues, all_preds)
-        out, f1 = evaluator.evaluate()
+            x['classes_to_id'] = x['classes_to_id'][0] if type(x['classes_to_id']) is list else x['classes_to_id']
+            x['id_to_classes'] = x['id_to_classes'][0] if type(x['id_to_classes']) is list else x['id_to_classes']
+            ner = x['entities']
+
+
+            batch_predictions = self.predict(x, flat_ner, threshold, ner)
+
+            if os.environ['TASK'] == 'ner':
+                batch_predictions_formatted = batch_predictions
+                all_trues.extend(x["entities"])
+            elif os.environ['TASK'] == 'rel':
+                # TODO: test throroughly
+                all_trues.extend(x["relations"])
+                # format relation predictions for metrics calculation
+                batch_predictions_formatted = []
+                for i, output in enumerate(batch_predictions):
+
+                    rels = []
+                    for (head_pos, tail_pos), pred_label, score in output:
+
+                        rel = {
+                            'head' : {'position': head_pos},
+                            'tail' : {'position': tail_pos},
+                            'relation_text': pred_label,
+                            'score': score,
+                        }
+                        
+                        rels.append(rel)
+
+                    batch_predictions_formatted.append(rels)
+
+            all_preds.extend(batch_predictions_formatted)
+                
+
+        if os.environ['TASK'] == 'ner':
+            evaluator = Evaluator(all_trues, all_preds)
+            out, f1 = evaluator.evaluate()
+
+        elif os.environ['TASK'] == 'rel':
+            evaluator = RelEvaluator(all_trues, all_preds)
+            out, f1 = evaluator.evaluate()
+        
         return out, f1
+
 
     @classmethod
     def _from_pretrained(
