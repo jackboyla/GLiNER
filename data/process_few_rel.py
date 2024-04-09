@@ -1,9 +1,17 @@
 from datasets import load_dataset
 import json
 
+NUM_TRAIN_EXAMPLES = 1000
+NUM_EVAL_EXAMPLES = 1000
 
 dataset = load_dataset("few_rel")    # features: ['relation', 'tokens', 'head', 'tail', 'names'],
-data = dataset['train_wiki'].select(range(10))
+ds = dataset['train_wiki'].shuffle(seed=42)
+
+# for i in range(15): 
+#     rel_texts = [rel for rel in ds[i]['names'][i]]
+#     print(f"Relation: {rel_texts}")
+
+data = ds.select(range(NUM_TRAIN_EXAMPLES))
 data = data.to_dict()
 
 '''
@@ -20,47 +28,58 @@ need to get relation text from Wikidata
 }
 '''
 
+def transform_few_rel(data):
+    # Transform the data into the desired format.
+    transformed_data = []
 
-# Transform the data into the desired format.
-transformed_data = []
+    for i in range(len(data['relation'])):
+        ner_entries = []
+        relations = []
+        tokens = data['tokens'][i]
+        head = data['head'][i]
+        tail = data['tail'][i]
+        relation = data['relation'][i]
+        relation_text = data['names'][i][0]
 
-for i in range(len(data['relation'])):
-    ner_entries = []
-    relations = []
-    tokens = data['tokens'][i]
-    head = data['head'][i]
-    tail = data['tail'][i]
-    relation = data['relation'][i]
-    relation_text = data['names'][i][0]
+        # Add head entity
+        head_start, head_end = head['indices'][0][0], head['indices'][0][-1] + 1
+        head_text = " ".join(tokens[head_start:head_end])
+        ner_entries.append([head_start, head_end, head['type'], head_text])
+        
+        # Add tail entity
+        tail_start, tail_end = tail['indices'][0][0], tail['indices'][0][-1] + 1
+        tail_text = " ".join(tokens[tail_start:tail_end])
+        ner_entries.append([tail_start, tail_end, tail['type'], tail_text])
+        
+        # Add relation
+        relations.append({
+            "head": {"mention": head_text, "position": [head_start, head_end], "type": head['type']},
+            "tail": {"mention": tail_text, "position": [tail_start, tail_end], "type": tail['type']},
+            "relation_id": relation,
+            "relation_text": relation_text,
+        })
 
-    # Add head entity
-    head_start, head_end = head['indices'][0][0], head['indices'][0][-1] + 1
-    head_text = " ".join(tokens[head_start:head_end])
-    ner_entries.append([head_start, head_end, head['type'], head_text])
-    
-    # Add tail entity
-    tail_start, tail_end = tail['indices'][0][0], tail['indices'][0][-1] + 1
-    tail_text = " ".join(tokens[tail_start:tail_end])
-    ner_entries.append([tail_start, tail_end, tail['type'], tail_text])
-    
-    # Add relation
-    relations.append({
-        "head": {"mention": head_text, "position": [head_start, head_end], "type": head['type']},
-        "tail": {"mention": tail_text, "position": [tail_start, tail_end], "type": tail['type']},
-        "relation_id": relation,
-        "relation_text": relation_text,
-    })
+        transformed_data.append({
+            "ner": ner_entries,
+            "relations": relations,
+            "tokenized_text": tokens,
+        })
 
-    transformed_data.append({
-        "ner": ner_entries,
-        "relations": relations,
-        "tokenized_text": tokens,
-    })
+    return transformed_data
 
-import json
+transformed_data = transform_few_rel(data)
 
-with open('./few_rel.jsonl', 'w') as f:
+with open('./few_rel_train.jsonl', 'w') as f:
     for item in transformed_data:
         f.write(json.dumps(item) + '\n')
 
+# Eval data
+ds = dataset['val_wiki'].shuffle(seed=42)
+data = ds.select(range(NUM_EVAL_EXAMPLES))
+data = data.to_dict()
 
+transformed_data = transform_few_rel(data)
+
+with open('./few_rel_eval.jsonl', 'w') as f:
+    for item in transformed_data:
+        f.write(json.dumps(item) + '\n')
