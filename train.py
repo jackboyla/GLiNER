@@ -22,12 +22,12 @@ logging.basicConfig(level=logging.INFO,
 
 '''
 
-python train.py --config config_small_rel.yaml --relation_extraction
+python train.py --config config_small_rel.yaml --log_dir logs --relation_extraction
 
 '''
 
 # train function
-def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=None, wandb_log=False, warmup_ratio=0.1,
+def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_every=100, log_dir=None, wandb_log=False, warmup_ratio=0.1,
           train_batch_size=8, device='cuda'):
     
     if wandb_log:
@@ -47,6 +47,8 @@ def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=
     # set up logging
     log_file = "train.log"
     log_file_path = os.path.join(log_dir, log_file)
+    if os.path.exists(log_file_path):
+        os.remove(log_file_path)
     file_handler = logging.FileHandler(log_file_path)
     file_handler.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -90,7 +92,7 @@ def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=
             logger.error(f"Error in step {step}: {e}")
             continue
 
-        logger.info(f"Step {step} | x['rel_label']: {x['rel_label'].shape} | x['tokens']: {len(x['tokens'])} | x['span_idx']: {x['span_idx'].shape} | loss: {loss.item()}")
+        logger.info(f"Step {step} | x['rel_label']: {x['rel_label'].shape} | x['tokens']: {len(x['tokens'])} | x['span_idx']: {x['span_idx'].shape} | loss: {loss.item()} | candidate_classes: {x['classes_to_id']}")
         
 
         # check if loss is nan
@@ -108,6 +110,23 @@ def train(model, optimizer, train_data, num_steps=1000, eval_every=100, log_dir=
             run.log({"loss": loss.item()})
 
         if (step + 1) % eval_every == 0:
+
+            logger.info('Evaluating...')
+
+            model.eval()
+            
+            if eval_data is not None:
+                results, f1 = model.evaluate(
+                    eval_data, 
+                    flat_ner=True, 
+                    threshold=0.5, 
+                    batch_size=12,
+                    # NOTE: we use collate_fn's ability to negative sample
+                    # instead of giving labels ourselves
+                    #  entity_types=eval_data["entity_types"]
+                )
+
+                logger.info(f"Step={step}\n{results}")
             current_path = os.path.join(log_dir, f'model_{step + 1}')
             model.save_pretrained(current_path)
             #val_data_dir =  "/gpfswork/rech/ohy/upa43yu/NER_datasets" # can be obtained from "https://drive.google.com/file/d/1T-5IbocGka35I7X3CE6yKe5N_Xg2lVKT/view"
@@ -155,6 +174,21 @@ if __name__ == "__main__":
     except:
         data = sample_train_data(config.train_data, 10000)
 
+    if hasattr(config, 'eval_data'):
+        try:
+            if config.eval_data.endswith('.jsonl'):
+                with open(config.eval_data, 'r') as f:
+                    eval_data = [json.loads(line) for line in f]
+            elif config.eval_data.endswith('.json'):
+                with open(config.eval_data, 'r') as f:
+                    eval_data = json.load(f)
+            else:
+                raise ValueError(f"Invalid data format: {config.eval_data}")
+        except:
+            eval_data = None
+    else:
+        eval_data = None
+
     if config.prev_path != "none":
         model = GLiNER.from_pretrained(config.prev_path)
         model.config = config
@@ -182,6 +216,6 @@ if __name__ == "__main__":
     # data = data[:2]
     # ###############
 
-    train(model, optimizer, data, num_steps=config.num_steps, eval_every=config.eval_every,
+    train(model, optimizer, data, eval_data=eval_data, num_steps=config.num_steps, eval_every=config.eval_every,
           log_dir=config.log_dir, wandb_log=args.wandb_log, warmup_ratio=config.warmup_ratio, train_batch_size=config.train_batch_size,
           device=device)
