@@ -6,7 +6,7 @@ lr_others: 5e-5
 num_steps: 30000
 warmup_ratio: 0.05
 train_batch_size: 8
-eval_every: 5000
+eval_every: 1000
 
 # Model Configuration
 max_width: 12
@@ -19,7 +19,8 @@ dropout: 0.1
 
 # Directory Paths
 root_dir: ablation_backbone
-train_data: "data/docred_expanded.jsonl"
+train_data: "data/few_rel_train.jsonl"
+eval_data: "data/few_rel_eval.jsonl"
 
 # "none" if no pretrained model 
 prev_path: "none"
@@ -27,10 +28,10 @@ prev_path: "none"
 
 # Training Specifics
 size_sup: -1
-max_types: 25  #  maximum number of relation types during training
+max_types: 5  #  maximum number of relation types during training
 shuffle_types: false  #true
 random_drop: false # randomly drop relation types
-max_neg_type_ratio: 1  # ratio of positive/negative types, 1 mean 50%/50%, 2 mean 33%/66%, 3 mean 25%/75% ...
+# max_neg_type_ratio: 1  # ratio of positive/negative types, 1 mean 50%/50%, 2 mean 33%/66%, 3 mean 25%/75% ...
 max_len: 384
 
 name: "small"
