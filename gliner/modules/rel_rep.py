@@ -33,9 +33,7 @@ class SpanMarkerV1(nn.Module):
     
 
 def get_entity_pair_reps(entity_reps):
-        # entity_reps.shape  -->  ([B, number_of_entities, D])  
-        
-        num_entities = entity_reps.size(1)
+        B, num_entities, D = entity_reps.shape
 
         # Create a tensor [B, num_entities, num_entities, D] by repeating entity_reps for pairing
         # Expanding entity_reps to pair each with every other
@@ -49,9 +47,17 @@ def get_entity_pair_reps(entity_reps):
 
         # Now we have an upper triangular matrix where each [i, j] element is the pair combination
         # of the i-th and j-th entities. We need to remove the diagonal and lower triangular parts.
-        triu_mask = torch.triu(torch.ones(num_entities, num_entities), diagonal=1).bool()
-        combined_pairs = pair_reps[:, triu_mask]
+        # triu_mask = torch.triu(torch.ones(num_entities, num_entities), diagonal=1).bool()
+        # combined_pairs = pair_reps[:, triu_mask]
 
+        # Create a mask to exclude self-pairs
+        indices = torch.arange(num_entities)
+        mask = indices.unsqueeze(0) != indices.unsqueeze(1)  # Create a mask to exclude self-pairs
+        mask = mask.unsqueeze(0).expand(B, -1, -1)           # Expand mask for all batches
+
+        combined_pairs = pair_reps[mask].view(B, -1, 2*D)    # Reshape to [B, num_valid_pairs, 2*D]
+
+        
         return combined_pairs
 
 
