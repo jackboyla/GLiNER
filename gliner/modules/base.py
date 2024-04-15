@@ -153,14 +153,14 @@ class InstructBase(nn.Module):
         }
         return out
 
-    def collate_fn(self, batch_list, entity_types=None):
+    def collate_fn(self, batch_list, entity_types=None, train_relation_types=None):
         # batch_list: list of dict containing tokens, ner
         if entity_types is None:
             if os.environ['TASK'] == 'ner':
                 negs = self.get_negatives(batch_list, 100)
             elif os.environ['TASK'] == 'rel':
-                negs = self.get_negatives_rel(batch_list, 100)
-                # negs = self.get_negatives_rel(relation_types, 100)
+                assert train_relation_types is not None, "`train_relation_types` must be provided for relation extraction data loader"
+                negs = self.get_negatives_rel(train_relation_types, 100)
             class_to_ids = []
             id_to_classes = []
             for b in batch_list:
@@ -201,14 +201,14 @@ class InstructBase(nn.Module):
 
                     positive_types = [el['relation_text'] for el in b['relations']]
 
-                    # make up to max_types using as many negatives as needed (none if there's already enough positives)
-                    remainder_relations = max(0, int(self.base_config.max_types) - len(b['relations']))
+                    # make up to num_train_rel_types using as many negatives as needed (none if there's already enough positives)
+                    remainder_relations = max(0, int(self.base_config.num_train_rel_types) - len(b['relations']))
                     negs_i = [negative for negative in negs if negative not in positive_types][:remainder_relations]
 
                     # this is the list of all possible relation types (positive and negative)
                     types = list(set(positive_types + negs_i))
-                    if len(types) < self.base_config.max_types:
-                        logger.warn(f"Relation types less than max_types: {len(types)} < {self.base_config.max_types}")
+                    if len(types) < self.base_config.num_train_rel_types:
+                        logger.warn(f"Relation types less than num_train_rel_types: {len(types)} < {self.base_config.num_train_rel_types}")
 
 
                 # shuffle (every epoch)
@@ -275,20 +275,15 @@ class InstructBase(nn.Module):
         return ent_types[:sampled_neg]
     
     @staticmethod
-    def get_negatives_rel(batch_list, sampled_neg=100):
-        rel_types = []
-        for b in batch_list:
-            types = set([el['relation_text'] for el in b['relations']])
-            rel_types.extend(list(types))
-        rel_types = list(set(rel_types))
+    def get_negatives_rel(train_relation_types, sampled_neg=100):
         # sample negatives
-        random.shuffle(rel_types)
-        return rel_types[:sampled_neg]
+        random.shuffle(train_relation_types)
+        return train_relation_types[:sampled_neg]
 
-    def create_dataloader(self, data, entity_types=None, **kwargs):
-        return DataLoader(data, collate_fn=lambda x: self.collate_fn(x, entity_types), **kwargs)
+    def create_dataloader(self, data, entity_types=None, train_relation_types=None, **kwargs):
+        return DataLoader(data, collate_fn=lambda x: self.collate_fn(x, entity_types, train_relation_types), **kwargs)
 
-    def set_sampling_params(self, max_types, shuffle_types, random_drop, max_neg_type_ratio, max_len):
+    def set_sampling_params(self, max_types, shuffle_types, random_drop, max_neg_type_ratio, max_len, num_train_rel_types=None):
         """
         Sets sampling parameters on the given model.
 
@@ -305,3 +300,4 @@ class InstructBase(nn.Module):
         self.base_config.random_drop = random_drop
         self.base_config.max_neg_type_ratio = max_neg_type_ratio
         self.base_config.max_len = max_len
+        self.base_config.num_train_rel_types = num_train_rel_types
