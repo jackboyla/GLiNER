@@ -15,7 +15,7 @@ fine_tune: true
 subtoken_pooling: first
 hidden_size: 768
 span_mode: marker
-dropout: 0.1
+dropout: 0.4
 
 # Directory Paths
 root_dir: ablation_backbone
@@ -28,9 +28,10 @@ prev_path: "none"
 
 # Training Specifics
 size_sup: -1
-max_types: 5  #  maximum number of relation types during training
-shuffle_types: false  #true
-random_drop: false # randomly drop relation types
+# max_types: 5         
+num_train_rel_types: 10   # number of relation labels to use in each given mini-batch
+shuffle_types: false
+random_drop: false       # randomly drop relation types
 # max_neg_type_ratio: 1  # ratio of positive/negative types, 1 mean 50%/50%, 2 mean 33%/66%, 3 mean 25%/75% ...
 max_len: 384
 
