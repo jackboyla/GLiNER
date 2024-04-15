@@ -26,9 +26,23 @@ python train.py --config config_small_rel.yaml --log_dir logs --relation_extract
 
 '''
 
+def get_unique_relations(data):
+    unique_rel_types = []
+    for item in data:
+        for r in item['relations']:
+            unique_rel_types.append(r["relation_text"])
+    unique_rel_types = list(set(unique_rel_types))
+    return unique_rel_types
+
 # train function
 def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_every=100, log_dir=None, wandb_log=False, warmup_ratio=0.1,
           train_batch_size=8, device='cuda'):
+    
+    train_rel_types = get_unique_relations(train_data)
+    eval_rel_types = get_unique_relations(eval_data) if eval_data is not None else None
+    logger.info(f"Num Train relation types: {len(train_rel_types)}")
+    logger.info(f"Num Eval relation types: {len(eval_rel_types) if eval_data is not None else 'None'}")
+    logger.info(f"Intersection: {set(train_rel_types) & set(eval_rel_types)}")
     
     if wandb_log:
         import wandb
@@ -58,7 +72,7 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
     model.train()
 
     # initialize data loaders
-    train_loader = model.create_dataloader(train_data, batch_size=train_batch_size, shuffle=False)
+    train_loader = model.create_dataloader(train_data, batch_size=train_batch_size, shuffle=False, train_relation_types=train_rel_types)
 
     pbar = tqdm(range(num_steps))
 
@@ -116,14 +130,13 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
             model.eval()
             
             if eval_data is not None:
+
                 results, f1 = model.evaluate(
                     eval_data, 
                     flat_ner=True, 
                     threshold=0.5, 
-                    batch_size=12,
-                    # NOTE: we use collate_fn's ability to negative sample
-                    # instead of giving labels ourselves
-                    #  entity_types=eval_data["entity_types"]
+                    batch_size=22,
+                    entity_types=eval_rel_types
                 )
 
                 logger.info(f"Step={step}\n{results}")
@@ -212,9 +225,6 @@ if __name__ == "__main__":
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    # ######### DEBUG
-    # data = data[:2]
-    # ###############
 
     train(model, optimizer, data, eval_data=eval_data, num_steps=config.num_steps, eval_every=config.eval_every,
           log_dir=config.log_dir, wandb_log=args.wandb_log, warmup_ratio=config.warmup_ratio, train_batch_size=config.train_batch_size,
