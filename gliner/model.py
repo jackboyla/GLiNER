@@ -18,6 +18,13 @@ from torch.nn.utils.rnn import pad_sequence
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
 from typing import List, Dict, Union
+import logging
+
+logger = logging.getLogger(__name__)
+
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()])
 
 
 
@@ -408,6 +415,7 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
 
     def evaluate(self, test_data, flat_ner=False, threshold=0.5, batch_size=12, entity_types=None):
         self.eval()
+        logger.info(f"Number of classes to evaluate with --> {len(entity_types)}")
         data_loader = self.create_dataloader(test_data, batch_size=batch_size, entity_types=entity_types, shuffle=False)
         device = next(self.parameters()).device
         all_preds = []
