@@ -1,8 +1,8 @@
 from datasets import load_dataset
 import json
 
-NUM_TRAIN_EXAMPLES = 1000
-NUM_EVAL_EXAMPLES = 1000
+NUM_TRAIN_EXAMPLES = 'all'
+NUM_EVAL_EXAMPLES = 'all'
 
 dataset = load_dataset("few_rel")    # features: ['relation', 'tokens', 'head', 'tail', 'names'],
 ds = dataset['train_wiki'].shuffle(seed=42)
@@ -11,7 +11,10 @@ ds = dataset['train_wiki'].shuffle(seed=42)
 #     rel_texts = [rel for rel in ds[i]['names'][i]]
 #     print(f"Relation: {rel_texts}")
 
-data = ds.select(range(NUM_TRAIN_EXAMPLES))
+if type(NUM_TRAIN_EXAMPLES) is int:
+    data = ds.select(range(NUM_TRAIN_EXAMPLES))
+else:
+    data = ds
 data = data.to_dict()
 
 '''
@@ -75,7 +78,10 @@ with open('./few_rel_train.jsonl', 'w') as f:
 
 # Eval data
 ds = dataset['val_wiki'].shuffle(seed=42)
-data = ds.select(range(NUM_EVAL_EXAMPLES))
+if type(NUM_EVAL_EXAMPLES) is int:
+    data = ds.select(range(NUM_EVAL_EXAMPLES))
+else:
+    data = ds
 data = data.to_dict()
 
 transformed_data = transform_few_rel(data)
