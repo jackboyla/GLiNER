@@ -297,7 +297,7 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
                 wh_i = [i.tolist() for i in torch.where(torch.sigmoid(local_i) > threshold)]
                 span_i = []
                 for s, k, c in zip(*wh_i):
-                    if s + k < len(x["tokens"][i]):
+                    if s + k < len(x["tokens"][i]):  # checks whether the end of a potential entity is within the sentence
                         span_i.append((s, s + k, x["id_to_classes"][c + 1], local_i[s, k, c]))
                 span_i = greedy_search(span_i, flat_ner)
                 spans.append(span_i)
@@ -321,12 +321,16 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
                 rels_i = []
                 for pair_idx, rel_type_idx in zip(*triggered_relations):
 
-                    score = probabilities[pair_idx, rel_type_idx].item()
-                    # Get the entity pair and relation type
-                    entity_pair = x["relations_idx"][i][pair_idx] 
-                    relation_type = x["id_to_classes"][rel_type_idx + 1]
-                 
-                    rels_i.append((entity_pair.cpu().numpy().tolist(), relation_type, score))
+                    # Check if the pair index is within the bounds of the entity pairs
+                    if pair_idx < len(x["relations_idx"][i]):
+
+                        score = probabilities[pair_idx, rel_type_idx].item()
+                        # Get the entity pair and relation type
+                        entity_pair = x["relations_idx"][i][pair_idx] 
+                        relation_type = x["id_to_classes"][rel_type_idx + 1]
+                    
+                        rels_i.append((entity_pair.cpu().numpy().tolist(), relation_type, score))
+                
                 rels.append(rels_i)
             return rels
 
@@ -413,7 +417,7 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
             return all_relations
 
 
-    def evaluate(self, test_data, flat_ner=False, threshold=0.5, batch_size=12, entity_types=None):
+    def evaluate(self, test_data, flat_ner=False, threshold=0.5, batch_size=12, entity_types=None, top_k=1):
         self.eval()
         logger.info(f"Number of classes to evaluate with --> {len(entity_types)}")
         data_loader = self.create_dataloader(test_data, batch_size=batch_size, entity_types=entity_types, shuffle=False)
@@ -441,17 +445,28 @@ class GLiNER(InstructBase, PyTorchModelHubMixin):
                 batch_predictions_formatted = []
                 for i, output in enumerate(batch_predictions):
 
+                    # sort output by score
+                    output = sorted(output, key=lambda x: x[2], reverse=True)
+
                     rels = []
+                    position_set = {}  # track all position predictions to take top_k predictions
                     for (head_pos, tail_pos), pred_label, score in output:
 
-                        rel = {
-                            'head' : {'position': head_pos},
-                            'tail' : {'position': tail_pos},
-                            'relation_text': pred_label,
-                            'score': score,
-                        }
-                        
-                        rels.append(rel)
+                        hashable_positions = (tuple(head_pos), tuple(tail_pos))
+                        if hashable_positions not in position_set:
+                            position_set[hashable_positions] = 0
+
+                        if position_set[hashable_positions] < top_k:
+
+                            rel = {
+                                'head' : {'position': head_pos},
+                                'tail' : {'position': tail_pos},
+                                'relation_text': pred_label,
+                                'score': score,
+                            }
+                            
+                            rels.append(rel)
+                            position_set[hashable_positions] += 1
 
                     batch_predictions_formatted.append(rels)
 
