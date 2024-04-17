@@ -12,6 +12,7 @@ from gliner.model import load_config_as_namespace
 from datetime import datetime
 import json
 import logging
+import random
 
 
 logger = logging.getLogger(__name__)
@@ -22,9 +23,15 @@ logging.basicConfig(level=logging.INFO,
 
 '''
 
-python train.py --config config_small_rel.yaml --log_dir logs --relation_extraction
+python train.py --config config_wiki_zsl.yaml --log_dir logs-wiki-zsl --relation_extraction
+
+
+python train.py --config config_few_rel.yaml --log_dir logs-few-rel --relation_extraction
+
 
 '''
+
+
 
 def get_unique_relations(data):
     unique_rel_types = []
@@ -34,15 +41,78 @@ def get_unique_relations(data):
     unique_rel_types = list(set(unique_rel_types))
     return unique_rel_types
 
+
+
+def split_data_by_relation_type(data, num_unseen_rel_types):
+    """
+    Attempts to split a dataset into training and testing sets based on relation types,
+    aiming to have a specified number of unique relation types exclusively in the test set
+    to simulate a zero-shot learning scenario. The function shuffles and splits the relation
+    types, allocating the first chunk as unseen relation types for testing and the rest for training.
+    
+    It iteratively adjusts the number of unseen relation types if the initial split does not achieve
+    the desired number of unique test relation types, retrying with an incremented number until it succeeds
+    or the number reaches twice the original request, resetting as needed.
+
+    Notes:
+        - This function relies heavily on the assumption that sufficient relation diversity exists
+          to meet the zero-shot criteria. If not, the test set may not end up with the intended
+          number of unique unseen relation types.
+        - The function can potentially skip a significant number of items that contain both train and
+          test relation types, leading to data wastage.
+        - The iterative process to adjust unseen relation types may lead to computational inefficiency,
+          especially for large datasets with diverse relations.
+    """
+
+    unique_relations = get_unique_relations(data)
+    correct_num_unseen_relations_achieved = False
+    original_num_unseen_rel_types = num_unseen_rel_types
+
+    while not correct_num_unseen_relations_achieved:
+        random.shuffle(unique_relations)
+        test_relation_types = set(unique_relations[ : num_unseen_rel_types ])
+        train_relation_types = set(unique_relations[ num_unseen_rel_types : ])
+        
+        train_data = []
+        test_data = []
+        skipped_items = []
+        
+        # Splitting data based on relation types
+        for item in data:
+            relation_types = {r["relation_text"] for r in item['relations']}
+            if relation_types.issubset(test_relation_types):
+                test_data.append(item)
+            elif relation_types.issubset(train_relation_types):
+                train_data.append(item)
+            else:
+                # Entries that contain both train and test relation types are currently skipped
+                skipped_items.append(item)
+        
+        # if we have the right number of eval relations, break
+        if len(get_unique_relations(test_data)) == original_num_unseen_rel_types: 
+            correct_num_unseen_relations_achieved = True
+        else:
+            # bump the number of unseen relations by 1 to cast a wider net
+            # if the bump gets too big, reset it
+            num_unseen_rel_types = num_unseen_rel_types + 1 if (num_unseen_rel_types <  original_num_unseen_rel_types*2) else num_unseen_rel_types
+        # logger.info('Incorrect number of unseen relation types. Retrying...')
+
+    if len(skipped_items) > 0:
+        logger.info(f"Skipped items: {len(skipped_items)} because they have __BOTH__ train and test relation types")
+    
+    return train_data, test_data
+
+    
+
+
+
 # train function
-def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_every=100, log_dir=None, wandb_log=False, warmup_ratio=0.1,
+def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_every=100, top_k=1, log_dir=None, wandb_log=False, warmup_ratio=0.1,
           train_batch_size=8, device='cuda'):
     
     train_rel_types = get_unique_relations(train_data)
     eval_rel_types = get_unique_relations(eval_data) if eval_data is not None else None
-    logger.info(f"Num Train relation types: {len(train_rel_types)}")
-    logger.info(f"Num Eval relation types: {len(eval_rel_types) if eval_data is not None else 'None'}")
-    logger.info(f"Intersection: {set(train_rel_types) & set(eval_rel_types)}")
+    max_saves = 5  # Maximum number of saved models
     
     if wandb_log:
         import wandb
@@ -89,6 +159,9 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
 
     iter_train_loader = iter(train_loader)
 
+    saved_models = []
+    best_f1 = 0
+
     for step in pbar:
         try:
             x = next(iter_train_loader)
@@ -126,6 +199,7 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
         if (step + 1) % eval_every == 0:
 
             logger.info('Evaluating...')
+            logger.info(f'Taking top k = {top_k} predictions for each relation...')
 
             model.eval()
             
@@ -135,15 +209,24 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
                     eval_data, 
                     flat_ner=True, 
                     threshold=0.5, 
-                    batch_size=22,
-                    entity_types=eval_rel_types
+                    batch_size=32,
+                    entity_types=eval_rel_types,
+                    top_k=top_k
                 )
 
                 logger.info(f"Step={step}\n{results}")
             current_path = os.path.join(log_dir, f'model_{step + 1}')
             model.save_pretrained(current_path)
-            #val_data_dir =  "/gpfswork/rech/ohy/upa43yu/NER_datasets" # can be obtained from "https://drive.google.com/file/d/1T-5IbocGka35I7X3CE6yKe5N_Xg2lVKT/view"
-            #get_for_all_path(model, step, log_dir, val_data_dir)  # you can remove this comment if you want to evaluate the model
+
+            saved_models.append((current_path, f1))
+            if len(saved_models) > max_saves:
+                saved_models.sort(key=lambda x: x[1], reverse=True)  # Sort models by F1 score
+                lowest_f1_model = saved_models.pop()  # Remove the model with the lowest F1 score
+                if lowest_f1_model[1] < best_f1:
+                    os.remove(lowest_f1_model[0])  # Delete the model file if its score is the lowest
+                
+                best_f1 = max(best_f1, f1)  # Update the best score
+            
 
             model.train()
 
@@ -175,6 +258,8 @@ if __name__ == "__main__":
 
     config.log_dir = args.log_dir
 
+    # Prep data
+
     try:
         if config.train_data.endswith('.jsonl'):
             with open(config.train_data, 'r') as f:
@@ -187,20 +272,45 @@ if __name__ == "__main__":
     except:
         data = sample_train_data(config.train_data, 10000)
 
+
     if hasattr(config, 'eval_data'):
-        try:
-            if config.eval_data.endswith('.jsonl'):
-                with open(config.eval_data, 'r') as f:
-                    eval_data = [json.loads(line) for line in f]
-            elif config.eval_data.endswith('.json'):
-                with open(config.eval_data, 'r') as f:
-                    eval_data = json.load(f)
-            else:
-                raise ValueError(f"Invalid data format: {config.eval_data}")
-        except:
-            eval_data = None
+
+        if config.eval_data.endswith('.jsonl'):
+            with open(config.eval_data, 'r') as f:
+                eval_data = [json.loads(line) for line in f]
+        elif config.eval_data.endswith('.json'):
+            with open(config.eval_data, 'r') as f:
+                eval_data = json.load(f)
+        else:
+            raise ValueError(f"Invalid data format: {config.eval_data}. Must be .jsonl or .json")
+
     else:
         eval_data = None
+
+
+    # train / eval split
+
+    if eval_data is None:
+        # create eval set from train data
+        train_data, eval_data = split_data_by_relation_type(data, config.num_unseen_rel_types)
+    else:
+        # partition eval data to get num_unseen_rel_types
+        _, eval_data = split_data_by_relation_type(eval_data, config.num_unseen_rel_types)
+        train_data = data
+
+    # validated_data = [TextData(**d) for d in train_data]
+    # validated_data_eval = [TextData(**d) for d in eval_data]
+
+    train_rel_types = get_unique_relations(train_data)
+    eval_rel_types = get_unique_relations(eval_data)
+    logger.info(f"Num Train relation types: {len(train_rel_types)}")
+    logger.info(f"Num Eval relation types: {len(eval_rel_types)}")
+    logger.info(f"Intersection: {set(train_rel_types) & set(eval_rel_types)}")
+    logger.info(f"Number of train samples: {len(train_data)}")
+    logger.info(f"Number of eval samples: {len(eval_data)}")
+
+
+    # Load model
 
     if config.prev_path != "none":
         model = GLiNER.from_pretrained(config.prev_path)
@@ -226,6 +336,6 @@ if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
-    train(model, optimizer, data, eval_data=eval_data, num_steps=config.num_steps, eval_every=config.eval_every,
+    train(model, optimizer, data, eval_data=eval_data, num_steps=config.num_steps, eval_every=config.eval_every, top_k=config.top_k,
           log_dir=config.log_dir, wandb_log=args.wandb_log, warmup_ratio=config.warmup_ratio, train_batch_size=config.train_batch_size,
           device=device)
