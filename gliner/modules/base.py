@@ -199,10 +199,10 @@ class InstructBase(nn.Module):
 
                 elif os.environ['TASK'] == 'rel':
 
-                    positive_types = [el['relation_text'] for el in b['relations']]
+                    positive_types = list(set([el['relation_text'] for el in b['relations']]))
 
                     # make up to num_train_rel_types using as many negatives as needed (none if there's already enough positives)
-                    remainder_relations = max(0, int(self.base_config.num_train_rel_types) - len(b['relations']))
+                    remainder_relations = max(0, int(self.base_config.num_train_rel_types) - len(positive_types))
                     negs_i = [negative for negative in negs if negative not in positive_types][:remainder_relations]
 
                     # this is the list of all possible relation types (positive and negative)
