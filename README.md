@@ -12,6 +12,74 @@ GLiNER is a Named Entity Recognition (NER) model capable of identifying any enti
 
 <img src="demo.jpg" alt="Demo Image" width="50%"/>
 
+---
+# GLiREL
+
+```
+conda create -n glirel python=3.10 -y && conda activate glirel
+cd GLiNER && pip install -e .
+```
+
+## To run experiments
+
+```bash
+# few_rel
+cd data
+python process_few_rel.py
+cd ..
+# adjust config
+python train.py --config config_few_rel.yaml --log_dir logs-few-rel --relation_extraction
+```
+
+```bash
+# wiki_zsl
+cd data
+curl -L -o wiki_all.json 'https://drive.google.com/uc?export=download&id=1ELFGUIYDClmh9GrEHjFYoE_VI1t2a5nK'
+python process_wiki_zsl.py
+cd ..
+# adjust config
+python train.py --config config_wiki_zsl.yaml --log_dir logs-wiki-zsl --relation_extraction
+
+```
+
+## Example training data
+
+JSONL file:
+```json
+{
+  "ner": [
+    [7, 8, "Q4914513", "Binsey"], 
+    [11, 13, "Q19686", "River Thames"]
+  ], 
+  "relations": [
+    {
+      "head": {"mention": "Binsey", "position": [7, 8], "type": "Q4914513"}, 
+      "tail": {"mention": "River Thames", "position": [11, 13], "type": "Q19686"}, 
+      "relation_id": "P206", 
+      "relation_text": "located in or next to body of water"
+    }
+  ], 
+  "tokenized_text": ["The", "race", "took", "place", "between", "Godstow", "and", "Binsey", "along", "the", "Upper", "River", "Thames", "."]
+},
+{
+  "ner": [
+    [9, 11, "Q4386693", "Legislative Assembly"], 
+    [1, 4, "Q1848835", "Parliament of Victoria"]
+  ], 
+  "relations": [
+    {
+      "head": {"mention": "Legislative Assembly", "position": [9, 11], "type": "Q4386693"}, 
+      "tail": {"mention": "Parliament of Victoria", "position": [1, 4], "type": "Q1848835"}, 
+      "relation_id": "P361", 
+      "relation_text": "part of"
+    }
+  ], 
+  "tokenized_text": ["The", "Parliament", "of", "Victoria", "consists", "of", "the", "lower", "house", "Legislative", "Assembly", ",", "the", "upper", "house", "Legislative", "Council", "and", "the", "Queen", "of", "Australia", "."]
+}
+
+
+```
+
 ## Models Status
 ### 📢 Updates
 - `gliner_mediumv2.1` is available under the Apache 2.0 license. It should be better/on par with `gliner_base` and `gliner_medium`.
