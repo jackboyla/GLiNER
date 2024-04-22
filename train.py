@@ -13,6 +13,8 @@ from datetime import datetime
 import json
 import logging
 import random
+import shutil
+import wandb
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,23 @@ python train.py --config config_few_rel.yaml --log_dir logs-few-rel --relation_e
 
 
 '''
+
+# Define sweep config
+sweep_configuration = {
+    "method": "random",
+    "name": "sweep",
+    "metric": {"goal": "maximize", "name": "eval_f1"},
+    "parameters": {
+        "num_train_rel_types": {"values": [20, 25, 30]},
+        "num_unseen_rel_types": {"values": [5, 10, 15]},
+        "lr_others": {"max": 1e-3, "min": 5e-5},
+    },
+}
+
+# Initialize sweep by passing in config.
+# (Optional) Provide a name of the project.
+sweep_id = wandb.sweep(sweep=sweep_configuration, project="GLiREL")
+
 
 
 
@@ -68,6 +87,7 @@ def split_data_by_relation_type(data, num_unseen_rel_types):
     correct_num_unseen_relations_achieved = False
     original_num_unseen_rel_types = num_unseen_rel_types
 
+    logger.info(f"Running dataset splitting...")
     while not correct_num_unseen_relations_achieved:
         random.shuffle(unique_relations)
         test_relation_types = set(unique_relations[ : num_unseen_rel_types ])
@@ -107,18 +127,17 @@ def split_data_by_relation_type(data, num_unseen_rel_types):
 
 
 # train function
-def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_every=100, top_k=1, log_dir=None, wandb_log=False, warmup_ratio=0.1,
-          train_batch_size=8, device='cuda'):
+def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_every=100, top_k=1, log_dir=None,
+          wandb_log=False, wandb_sweep=False, warmup_ratio=0.1, train_batch_size=8, device='cuda'):
     
     train_rel_types = get_unique_relations(train_data)
     eval_rel_types = get_unique_relations(eval_data) if eval_data is not None else None
-    max_saves = 5  # Maximum number of saved models
+    max_saves = 2  # Maximum number of saved models
     
     if wandb_log:
-        import wandb
         # Start a W&B Run with wandb.init
         wandb.login()
-        run = wandb.init(project="GLiREL")
+        run = wandb.init()
     else:
         run = None
     
@@ -196,6 +215,14 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
         if run is not None:
             run.log({"loss": loss.item()})
 
+        elif wandb_sweep:
+            wandb.log(
+                    {
+                    "epoch": step // len(train_loader),
+                    "train_loss": loss.item(),
+                }
+            )
+
         if (step + 1) % eval_every == 0:
 
             logger.info('Evaluating...')
@@ -214,6 +241,14 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
                     top_k=top_k
                 )
 
+                if wandb_sweep:
+                    wandb.log(
+                            {
+                            "epoch": step // len(train_loader),
+                            "eval_f1": f1,
+                        }
+                    )
+
                 logger.info(f"Step={step}\n{results}")
             current_path = os.path.join(log_dir, f'model_{step + 1}')
             model.save_pretrained(current_path)
@@ -223,7 +258,7 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
                 saved_models.sort(key=lambda x: x[1], reverse=True)  # Sort models by F1 score
                 lowest_f1_model = saved_models.pop()  # Remove the model with the lowest F1 score
                 if lowest_f1_model[1] < best_f1:
-                    os.remove(lowest_f1_model[0])  # Delete the model file if its score is the lowest
+                    shutil.rmtree(lowest_f1_model[0])  # Delete the model file if its score is the lowest
                 
                 best_f1 = max(best_f1, f1)  # Update the best score
             
@@ -234,18 +269,16 @@ def train(model, optimizer, train_data, eval_data=None, num_steps=1000, eval_eve
 
 
 def create_parser():
-    parser = argparse.ArgumentParser(description="Span-based NER")
+    parser = argparse.ArgumentParser(description="Zero-shot Relation Extraction")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
     parser.add_argument('--log_dir', type=str, default=None, help='Path to the log directory')
     parser.add_argument("--relation_extraction", action="store_true", help="Activate relation extraction mode")
     parser.add_argument("--wandb_log", action="store_true", help="Activate wandb logging")
+    parser.add_argument("--wandb_sweep", action="store_true", help="Activate wandb hyperparameter sweep")
     return parser
 
 
-if __name__ == "__main__":
-    # parse args
-    parser = create_parser()
-    args = parser.parse_args()
+def main(args):
 
     if args.relation_extraction is True:
         os.environ['TASK'] = 'rel'
@@ -255,6 +288,14 @@ if __name__ == "__main__":
 
     # load config
     config = load_config_as_namespace(args.config)
+
+    if args.wandb_sweep:
+        run = wandb.init()
+        # overwrite config values with sweep values 
+        config.num_train_rel_types = wandb.config.num_train_rel_types
+        config.num_unseen_rel_types = wandb.config.num_unseen_rel_types
+        config.lr_others = wandb.config.lr_others
+
 
     config.log_dir = args.log_dir
 
@@ -337,5 +378,19 @@ if __name__ == "__main__":
 
 
     train(model, optimizer, data, eval_data=eval_data, num_steps=config.num_steps, eval_every=config.eval_every, top_k=config.top_k,
-          log_dir=config.log_dir, wandb_log=args.wandb_log, warmup_ratio=config.warmup_ratio, train_batch_size=config.train_batch_size,
+          log_dir=config.log_dir, wandb_log=args.wandb_log, wandb_sweep=args.wandb_sweep, warmup_ratio=config.warmup_ratio, train_batch_size=config.train_batch_size,
           device=device)
+
+
+if __name__ == "__main__":
+    # parse args
+    parser = create_parser()
+    args = parser.parse_args()
+
+    assert not (args.wandb_log is True and args.wandb_sweep is True), "Cannot use both wandb logging and wandb sweep at the same time."
+
+    if args.wandb_sweep:
+        # Start sweep job.
+        wandb.agent(sweep_id, function=main(args), count=4)
+    else:
+        main(args)
