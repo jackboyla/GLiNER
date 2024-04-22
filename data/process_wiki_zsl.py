@@ -4,7 +4,8 @@ random.seed(12)
 
 NUM_EXAMPLES = 'all'
 
-# from https://drive.google.com/file/d/1ELFGUIYDClmh9GrEHjFYoE_VI1t2a5nK/view?usp=sharing
+# curl -L -o wiki_all.json 'https://drive.google.com/uc?export=download&id=1ELFGUIYDClmh9GrEHjFYoE_VI1t2a5nK'
+
 with open('wiki_all.json', 'r') as f:    # len --> 93483
     dataset = json.load(f)
 
